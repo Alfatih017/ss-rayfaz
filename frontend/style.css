@@ -612,6 +612,12 @@ tbody tr:last-child td { border-bottom: 0; }
   justify-content: space-between;
   margin-bottom: 14px;
 }
+.wallet-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.wallet-card { border:1px solid var(--atrium-line); border-radius:var(--radius-lg); padding:16px; background:var(--atrium-surface-low); }
+.wallet-card.main-wallet { border-color:var(--atrium-gold); }
+.wallet-card-head { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
+.wallet-balance { margin:14px 0; font-family:'Cormorant Garamond',serif; font-size:24px; color:var(--atrium-gold-soft); }
+.wallet-transfer-row { display:grid; grid-template-columns:minmax(180px,2fr) minmax(100px,1fr) auto; gap:8px; align-items:end; }
 
 .mono {
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
@@ -659,4 +665,5 @@ textarea { width: 100%; resize: vertical; min-height: 96px; }
 
 @media (max-width: 600px) {
   .gen-row { grid-template-columns: 1fr; }
+  .wallet-grid,.wallet-transfer-row { grid-template-columns:1fr; }
 }

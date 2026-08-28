@@ -81,6 +81,7 @@ function nav() {
   const links = [
     { id: 'swap', label: 'Swap' },
     { id: 'bulk', label: 'Bulk' },
+    { id: 'wallets', label: 'Wallets' },
     { id: 'history', label: 'History' }
   ];
   if (state.me?.isAdmin) links.push({ id: 'admin', label: 'Tokens' });
@@ -1027,6 +1028,25 @@ function showSecretModal(r) {
   document.body.appendChild(overlay);
 }
 
+async function walletsView() {
+  const wrap=h('div',{class:'container wide'},h('div',{class:'card'},h('div',{class:'eyebrow'},'Treasury'),h('h1',{},'Wallets'),h('div',{class:'muted',style:'margin:6px 0 22px'},'View SOL balances and transfer from any stored wallet on Solana mainnet-beta.'),h('div',{id:'wallet-balances'},h('div',{class:'muted'},'Loading…'))));
+  const target=wrap.querySelector('#wallet-balances');
+  try {
+    const rows=await api.get('/api/wallets/balances');target.innerHTML='';
+    if(!rows.length){target.appendChild(h('div',{class:'muted'},'No wallets configured.'));return wrap;}
+    target.appendChild(h('div',{class:'wallet-grid'},...rows.map(w=>{
+      const destination=h('input',{class:'mono',placeholder:'Destination Solana address'});const amount=h('input',{type:'number',min:'0.000000001',step:'0.000000001',placeholder:'SOL amount'});
+      const send=h('button',{onclick:async()=>{const password=prompt('Enter account password to create a signed preview:');if(!password)return;send.disabled=true;try{const p=await api.post('/api/wallets/transfer/preview',{sourceWalletId:w.id,destination:destination.value.trim(),amountSol:amount.value,password});showTransferPreview(p);}catch(e){toast(e.message,'error');}finally{send.disabled=false;}}},'Preview Transfer');
+      return h('div',{class:`wallet-card${w.is_main?' main-wallet':''}`},h('div',{class:'wallet-card-head'},h('div',{},h('div',{class:'eyebrow'},w.is_main?'Wallet Utama':'Wallet Tujuan Swap'),h('h2',{},w.label||'Unlabeled wallet')),w.is_main?h('span',{class:'status settled'},'MAIN'):null),h('div',{class:'value mono'},w.public_key),h('div',{class:'wallet-balance'},w.balanceSol===null?'Balance unavailable':`${w.balanceSol.toFixed(9)} SOL`),h('div',{class:'wallet-transfer-row'},destination,amount,send));
+    })));
+  } catch(e){target.innerHTML='';target.appendChild(h('div',{class:'muted'},'Unable to load wallet balances: '+e.message));}
+  return wrap;
+}
+
+function showTransferPreview(p){
+  const overlay=h('div',{class:'modal-overlay',onclick:e=>{if(e.target===overlay)overlay.remove();}});const box=h('div',{class:'modal-box'},h('div',{class:'eyebrow'},'Mainnet Transfer Preview'),h('h1',{style:'font-size:22px'},`${p.amountSol} SOL`),h('div',{class:'summary-row'},h('span',{class:'k'},'From'),h('span',{class:'v mono'},p.sourceAddress)),h('div',{class:'summary-row'},h('span',{class:'k'},'To'),h('span',{class:'v mono'},p.destination)),h('div',{class:'summary-row'},h('span',{class:'k'},'Estimated fee'),h('span',{class:'v'},`${p.feeSol} SOL`)),h('div',{class:'summary-row'},h('span',{class:'k'},'Remaining balance'),h('span',{class:'v'},`${p.balanceAfterSol} SOL`)),h('div',{class:'muted',style:'margin-top:12px'},`Expires ${new Date(p.expiresAt).toLocaleTimeString()}. Confirmation broadcasts real funds and cannot be undone.`),h('div',{class:'actions'},h('button',{class:'danger',onclick:async()=>{if(!confirm('Broadcast this irreversible SOL transfer on mainnet?'))return;const password=prompt('Re-enter account password to broadcast:');if(!password)return;try{const r=await api.post('/api/wallets/transfer/confirm',{previewToken:p.previewToken,password});toast('Transfer confirmed: '+r.signature.slice(0,12)+'…','success');overlay.remove();state.view='wallets';render();}catch(e){toast(e.message,'error');}}},'Confirm & Send'),h('button',{class:'ghost',onclick:()=>overlay.remove()},'Cancel')));overlay.appendChild(box);document.body.appendChild(overlay);
+}
+
 function accountView() {
   const cur = h('input', { type: 'password', placeholder: 'Current password' });
   const nx = h('input', { type: 'password', placeholder: 'New password (min 12 chars)' });
@@ -1076,6 +1096,7 @@ async function render() {
   let view;
   if (state.view === 'swap') view = swapView();
   else if (state.view === 'bulk') view = await bulkView();
+  else if (state.view === 'wallets') view = await walletsView();
   else if (state.view === 'history') view = await historyView();
   else if (state.view === 'admin' && state.me.isAdmin) view = await adminView();
   else if (state.view === 'account') view = accountView();

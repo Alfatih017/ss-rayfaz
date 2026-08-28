@@ -77,6 +77,17 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (wallet_id) REFERENCES wallets(id)
   );
+
+  CREATE TABLE IF NOT EXISTS sol_transfer_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_wallet_id INTEGER NOT NULL,
+    destination TEXT NOT NULL,
+    amount_lamports TEXT NOT NULL,
+    fee_lamports TEXT NOT NULL,
+    signature TEXT UNIQUE NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (source_wallet_id) REFERENCES wallets(id)
+  );
 `);
 
 const userCount = db.prepare('SELECT COUNT(*) as c FROM users').get().c;

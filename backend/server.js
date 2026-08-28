@@ -7,6 +7,7 @@ const SQLiteSessionStore = require('./session-store');
 const db = require('./db');
 const ss = require('./sideshift');
 const wallet = require('./wallet');
+const solanaTransfer = require('./solana-transfer.service');
 
 if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
   throw new Error('SESSION_SECRET is required and must be at least 32 characters');
@@ -325,6 +326,22 @@ app.get('/api/wallets', requireAdmin, (req, res) => {
      FROM wallets ORDER BY created_at DESC`
   ).all();
   res.json(rows);
+});
+
+app.get('/api/wallets/balances', requireAdmin, async (req, res) => {
+  const rows=db.prepare('SELECT w.id,w.label,w.network,w.public_key,w.created_at,(ws.wallet_id IS NOT NULL) AS is_main FROM wallets w LEFT JOIN wallet_settings ws ON ws.wallet_id=w.id ORDER BY is_main DESC,w.created_at DESC').all();
+  res.json(await solanaTransfer.balances(rows));
+});
+
+app.post('/api/wallets/transfer/preview', requireAdmin, async (req, res) => {
+  if(!verifyAdminPassword(req.session.userId,req.body?.password))return res.status(401).json({error:'password verification failed'});
+  const source=db.prepare('SELECT * FROM wallets WHERE id=?').get(Number(req.body?.sourceWalletId));if(!source)return res.status(404).json({error:'source wallet not found'});
+  try{const secret=wallet.decryptSecret(source.secret_key_enc,source.iv,source.auth_tag);res.set('Cache-Control','no-store');res.json(await solanaTransfer.preview({secretKey:secret,sourceId:source.id,sourceLabel:source.label,destination:req.body?.destination,amountSol:req.body?.amountSol,owner:req.session.userId}));}catch(e){res.status(e.status||502).json({error:e.message});}
+});
+
+app.post('/api/wallets/transfer/confirm', requireAdmin, async (req, res) => {
+  if(!verifyAdminPassword(req.session.userId,req.body?.password))return res.status(401).json({error:'password verification failed'});
+  try{const result=await solanaTransfer.confirm(req.body?.previewToken,req.session.userId);db.prepare('INSERT INTO sol_transfer_log(source_wallet_id,destination,amount_lamports,fee_lamports,signature) VALUES(?,?,?,?,?)').run(result.sourceId,result.destination,result.amountLamports,result.feeLamports,result.signature);res.set('Cache-Control','no-store');res.json(result);}catch(e){res.status(e.status||502).json({error:e.message});}
 });
 
 app.post('/api/wallets/generate', requireAdmin, (req, res) => {
