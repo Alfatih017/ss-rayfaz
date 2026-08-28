@@ -802,9 +802,11 @@ async function bulkView() {
               const list = await api.get('/api/wallets');
               if (!list.length) return toast('No wallets to export', 'error');
               if (!confirm(`Export ${list.length} wallets WITH private keys to CSV?\n\nThe file will contain plaintext secrets — store it safely.`)) return;
+              const password = prompt('Enter your account password to export private keys:');
+              if (!password) return;
               const rows = [];
               for (const w of list) {
-                const r = await api.get('/api/wallets/' + w.id + '/reveal');
+                const r = await api.post('/api/wallets/' + w.id + '/reveal', { password });
                 rows.push([w.label || '', w.network, w.public_key, r.secret_key_base58]);
               }
               const csv = 'label,network,public_key,secret_key_base58\n' +
@@ -919,7 +921,9 @@ async function bulkView() {
             ' ',
             h('button', { class: 'ghost', style: 'padding: 7px 12px; font-size: 11px;', onclick: async () => {
               try {
-                const r = await api.get('/api/wallets/' + w.id + '/reveal');
+                const password = prompt('Enter your account password to reveal this private key:');
+                if (!password) return;
+                const r = await api.post('/api/wallets/' + w.id + '/reveal', { password });
                 showSecretModal(r);
               } catch (e) { toast(e.message, 'error'); }
             }}, 'Reveal'),
@@ -996,6 +1000,9 @@ function showSecretModal(r) {
     h('h1', { style: 'font-size: 22px;' }, 'Private Key Reveal'),
     h('div', { class: 'muted', style: 'margin: 6px 0 22px' },
       `Wallet: ${r.label || '(no label)'} · ${r.network}`),
+    r.mnemonic ? h('div', { class: 'dep-label' }, 'Seed Phrase') : null,
+    r.mnemonic ? h('div', { class: 'value secret-value' }, r.mnemonic) : null,
+    r.mnemonic ? h('button', { class: 'copy-btn', onclick: () => navigator.clipboard.writeText(r.mnemonic) }, 'Copy Seed Phrase') : null,
     h('div', { class: 'dep-label' }, 'Public Key'),
     h('div', { class: 'value' }, r.public_key),
     h('div', { class: 'dep-label' }, 'Secret Key (Base58 — Phantom / Solflare)'),
@@ -1022,7 +1029,12 @@ function showSecretModal(r) {
 
 function accountView() {
   const cur = h('input', { type: 'password', placeholder: 'Current password' });
-  const nx = h('input', { type: 'password', placeholder: 'New password (min 6 chars)' });
+  const nx = h('input', { type: 'password', placeholder: 'New password (min 12 chars)' });
+  const mnemonic = h('textarea', { rows: 4, autocomplete: 'off', spellcheck: 'false', placeholder: 'Enter a valid 12 or 24 word seed phrase' });
+  const walletPassword = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'Account password' });
+  const walletStatus = h('div', { class: 'muted', style: 'margin-top:12px' }, 'Checking wallet settings…');
+  const refreshWalletStatus = async () => { try { const s = await api.get('/api/settings/wallet'); walletStatus.textContent = s.configured ? `Configured · ${s.public_key}` : 'No seed wallet configured.'; } catch (e) { walletStatus.textContent = 'Unable to load wallet settings.'; } };
+  refreshWalletStatus();
   return h('div', { class: 'container' },
     h('div', { class: 'card' },
       h('div', { class: 'eyebrow' }, 'Profile'),
@@ -1038,7 +1050,17 @@ function accountView() {
           toast('Password updated', 'success');
           cur.value = ''; nx.value = '';
         } catch (e) { toast(e.message, 'error'); }
-      }}, 'Update')
+      }}, 'Update'),
+      state.me.isAdmin ? h('div', { class: 'divider' }) : null,
+      state.me.isAdmin ? h('h2', { style: 'margin-bottom:8px' }, 'Seed Wallet') : null,
+      state.me.isAdmin ? h('div', { class: 'muted', style: 'margin-bottom:14px' }, 'The phrase and derived Solana private key are encrypted at rest. Derivation path: m/44′/501′/0′/0′.') : null,
+      state.me.isAdmin ? h('div', { style: 'margin-bottom:12px' }, mnemonic) : null,
+      state.me.isAdmin ? h('div', { style: 'margin-bottom:14px' }, walletPassword) : null,
+      state.me.isAdmin ? h('div', { class: 'actions compact-actions' },
+        h('button', { onclick: async () => { try { const r = await api.post('/api/settings/wallet', { mnemonic: mnemonic.value, password: walletPassword.value }); mnemonic.value=''; walletPassword.value=''; toast('Seed wallet saved securely', 'success'); await refreshWalletStatus(); } catch(e) { toast(e.message,'error'); } } }, 'Save Seed Wallet'),
+        h('button', { class: 'ghost', onclick: async () => { const password=prompt('Enter your account password to reveal the seed and private key:'); if(!password)return; try { showSecretModal(await api.post('/api/settings/wallet/reveal',{password})); } catch(e){ toast(e.message,'error'); } } }, 'Reveal Secrets')
+      ) : null,
+      state.me.isAdmin ? walletStatus : null
     )
   );
 }

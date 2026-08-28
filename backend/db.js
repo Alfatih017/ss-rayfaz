@@ -67,6 +67,16 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_wallets_network ON wallets(network);
+
+  CREATE TABLE IF NOT EXISTS wallet_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    mnemonic_enc TEXT NOT NULL,
+    mnemonic_iv TEXT NOT NULL,
+    mnemonic_tag TEXT NOT NULL,
+    wallet_id INTEGER NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (wallet_id) REFERENCES wallets(id)
+  );
 `);
 
 const userCount = db.prepare('SELECT COUNT(*) as c FROM users').get().c;

@@ -60,6 +60,10 @@ function requireAdmin(req, res, next) {
     return res.status(403).json({ error: 'forbidden' });
   next();
 }
+function verifyAdminPassword(userId, password) {
+  const user = db.prepare('SELECT password_hash,is_admin FROM users WHERE id=?').get(userId);
+  return !!user?.is_admin && typeof password === 'string' && bcrypt.compareSync(password, user.password_hash);
+}
 
 app.post('/api/auth/login', loginRateLimit, (req, res, next) => {
   const { username, password } = req.body || {};
@@ -346,7 +350,8 @@ app.post('/api/wallets/generate', requireAdmin, (req, res) => {
   res.json({ created });
 });
 
-app.get('/api/wallets/:id/reveal', requireAdmin, (req, res) => {
+app.post('/api/wallets/:id/reveal', requireAdmin, (req, res) => {
+  if (!verifyAdminPassword(req.session.userId, req.body?.password)) return res.status(401).json({ error: 'password verification failed' });
   const row = db.prepare('SELECT * FROM wallets WHERE id = ?').get(Number(req.params.id));
   if (!row) return res.status(404).json({ error: 'not found' });
   try {
@@ -364,6 +369,33 @@ app.get('/api/wallets/:id/reveal', requireAdmin, (req, res) => {
   } catch (e) {
     res.status(500).json({ error: 'decrypt failed: ' + e.message });
   }
+});
+
+app.get('/api/settings/wallet', requireAdmin, (req, res) => {
+  const row = db.prepare('SELECT ws.updated_at,w.id,w.label,w.public_key FROM wallet_settings ws JOIN wallets w ON w.id=ws.wallet_id WHERE ws.id=1').get();
+  res.json(row ? { configured: true, ...row } : { configured: false });
+});
+
+app.post('/api/settings/wallet', requireAdmin, (req, res) => {
+  if (!verifyAdminPassword(req.session.userId, req.body?.password)) return res.status(401).json({ error: 'password verification failed' });
+  let derived; try { derived = wallet.deriveSolanaKeypair(req.body?.mnemonic); } catch { return res.status(400).json({ error: 'invalid 12 or 24 word mnemonic' }); }
+  const secret = wallet.encryptSecret(derived.secretKey); const phrase = wallet.encryptSecret(Buffer.from(derived.mnemonic));
+  const save = db.transaction(() => {
+    let row = db.prepare('SELECT id FROM wallets WHERE public_key=?').get(derived.publicKey);
+    if (!row) row = { id: db.prepare("INSERT INTO wallets(label,network,public_key,secret_key_enc,iv,auth_tag) VALUES('Imported seed wallet','solana',?,?,?,?)").run(derived.publicKey,secret.enc,secret.iv,secret.tag).lastInsertRowid };
+    db.prepare('INSERT INTO wallet_settings(id,mnemonic_enc,mnemonic_iv,mnemonic_tag,wallet_id,updated_at) VALUES(1,?,?,?,?,datetime(\'now\')) ON CONFLICT(id) DO UPDATE SET mnemonic_enc=excluded.mnemonic_enc,mnemonic_iv=excluded.mnemonic_iv,mnemonic_tag=excluded.mnemonic_tag,wallet_id=excluded.wallet_id,updated_at=excluded.updated_at').run(phrase.enc,phrase.iv,phrase.tag,row.id);
+    return row.id;
+  });
+  const id = save(); res.json({ ok: true, walletId: id, publicKey: derived.publicKey });
+});
+
+app.post('/api/settings/wallet/reveal', requireAdmin, (req, res) => {
+  if (!verifyAdminPassword(req.session.userId, req.body?.password)) return res.status(401).json({ error: 'password verification failed' });
+  const row = db.prepare('SELECT ws.*,w.label,w.network,w.public_key,w.secret_key_enc,w.iv,w.auth_tag FROM wallet_settings ws JOIN wallets w ON w.id=ws.wallet_id WHERE ws.id=1').get();
+  if (!row) return res.status(404).json({ error: 'seed wallet not configured' });
+  res.set('Cache-Control', 'no-store');
+  const secret = wallet.decryptSecret(row.secret_key_enc,row.iv,row.auth_tag); const mnemonic = wallet.decryptSecret(row.mnemonic_enc,row.mnemonic_iv,row.mnemonic_tag).toString('utf8');
+  res.json({ label:row.label,network:row.network,public_key:row.public_key,secret_key_base58:(require('bs58').default||require('bs58')).encode(secret),secret_key_array:Array.from(secret),mnemonic });
 });
 
 app.put('/api/wallets/:id', requireAdmin, (req, res) => {

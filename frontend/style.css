@@ -650,6 +650,9 @@ tbody tr:last-child td { border-bottom: 0; }
   background: linear-gradient(90deg, transparent, var(--atrium-gold-soft), transparent);
   opacity: 0.4;
 }
+.secret-value { overflow-wrap: anywhere; user-select: all; }
+textarea { width: 100%; resize: vertical; min-height: 96px; }
+.compact-actions { margin-top: 0; }
 @keyframes fadeIn {
   from { opacity: 0; } to { opacity: 1; }
 }
