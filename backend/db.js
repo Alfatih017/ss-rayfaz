@@ -71,10 +71,15 @@ db.exec(`
 
 const userCount = db.prepare('SELECT COUNT(*) as c FROM users').get().c;
 if (userCount === 0) {
-  const hash = bcrypt.hashSync('akulupa', 10);
+  const username = process.env.ADMIN_USERNAME;
+  const password = process.env.ADMIN_PASSWORD;
+  if (!username || !password || password.length < 12) {
+    throw new Error('ADMIN_USERNAME and ADMIN_PASSWORD (minimum 12 characters) are required for first boot');
+  }
+  const hash = bcrypt.hashSync(password, 12);
   db.prepare('INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, 1)')
-    .run('ram', hash);
-  console.log('[db] Seeded default admin user: ram');
+    .run(username, hash);
+  console.log('[db] Seeded configured admin user');
 }
 
 const tokenCount = db.prepare('SELECT COUNT(*) as c FROM tokens').get().c;

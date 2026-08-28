@@ -2,19 +2,31 @@ require('dotenv').config();
 const path = require('path');
 const express = require('express');
 const session = require('express-session');
-const SQLiteStore = require('connect-sqlite3')(session);
 const bcrypt = require('bcryptjs');
+const SQLiteSessionStore = require('./session-store');
 const db = require('./db');
 const ss = require('./sideshift');
 const wallet = require('./wallet');
+
+if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
+  throw new Error('SESSION_SECRET is required and must be at least 32 characters');
+}
 
 const app = express();
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '256kb' }));
 
+const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN || 'https://side.marketku.id';
+app.use((req, res, next) => {
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers.origin && req.headers.origin !== PUBLIC_ORIGIN) {
+    return res.status(403).json({ error: 'forbidden origin' });
+  }
+  next();
+});
+
 app.use(session({
-  store: new SQLiteStore({ db: 'sessions.db', dir: path.join(__dirname, '..', 'data') }),
-  secret: process.env.SESSION_SECRET || 'dev-secret-change-me',
+  store: new SQLiteSessionStore(path.join(__dirname, '..', 'data', 'sessions.db')),
+  secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
@@ -26,9 +38,17 @@ app.use(session({
 }));
 
 function clientIp(req) {
-  const xf = req.headers['x-forwarded-for'];
-  if (xf) return String(xf).split(',')[0].trim();
   return req.ip;
+}
+
+const loginAttempts = new Map();
+function loginRateLimit(req, res, next) {
+  const key = `${req.ip}:${String(req.body?.username || '').toLowerCase()}`;
+  const now = Date.now();
+  const state = loginAttempts.get(key);
+  if (state && state.resetAt > now && state.count >= 5) return res.status(429).json({ error: 'too many attempts' });
+  req.loginAttemptKey = key;
+  next();
 }
 
 function requireAuth(req, res, next) {
@@ -41,16 +61,23 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', loginRateLimit, (req, res, next) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'missing fields' });
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
-  if (!user || !bcrypt.compareSync(password, user.password_hash))
+  if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+    const current = loginAttempts.get(req.loginAttemptKey);
+    loginAttempts.set(req.loginAttemptKey, current?.resetAt > Date.now() ? { count: current.count + 1, resetAt: current.resetAt } : { count: 1, resetAt: Date.now() + 15 * 60 * 1000 });
     return res.status(401).json({ error: 'invalid credentials' });
-  req.session.userId = user.id;
-  req.session.username = user.username;
-  req.session.isAdmin = !!user.is_admin;
-  res.json({ ok: true, username: user.username, isAdmin: !!user.is_admin });
+  }
+  loginAttempts.delete(req.loginAttemptKey);
+  req.session.regenerate((error) => {
+    if (error) return next(error);
+    req.session.userId = user.id;
+    req.session.username = user.username;
+    req.session.isAdmin = !!user.is_admin;
+    req.session.save((saveError) => saveError ? next(saveError) : res.json({ ok: true, username: user.username, isAdmin: !!user.is_admin }));
+  });
 });
 
 app.post('/api/auth/logout', (req, res) => {
@@ -68,14 +95,14 @@ app.get('/api/auth/me', (req, res) => {
 
 app.post('/api/auth/change-password', requireAuth, (req, res) => {
   const { current, next: nextPw } = req.body || {};
-  if (!current || !nextPw || nextPw.length < 6)
+  if (!current || !nextPw || nextPw.length < 12 || nextPw.length > 128)
     return res.status(400).json({ error: 'invalid input' });
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.session.userId);
   if (!bcrypt.compareSync(current, user.password_hash))
     return res.status(401).json({ error: 'current password wrong' });
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?')
-    .run(bcrypt.hashSync(nextPw, 10), user.id);
-  res.json({ ok: true });
+    .run(bcrypt.hashSync(nextPw, 12), user.id);
+  req.session.regenerate((error) => error ? res.status(500).json({ error: 'session reset failed' }) : res.json({ ok: true, loginRequired: true }));
 });
 
 app.get('/api/tokens', requireAuth, (req, res) => {
@@ -288,7 +315,7 @@ app.post('/api/shifts/:id/set-refund-address', requireAuth, async (req, res) => 
   } catch (e) { res.status(e.status || 500).json({ error: e.message, body: e.body }); }
 });
 
-app.get('/api/wallets', requireAuth, (req, res) => {
+app.get('/api/wallets', requireAdmin, (req, res) => {
   const rows = db.prepare(
     `SELECT id, label, network, public_key, created_at
      FROM wallets ORDER BY created_at DESC`
@@ -296,7 +323,7 @@ app.get('/api/wallets', requireAuth, (req, res) => {
   res.json(rows);
 });
 
-app.post('/api/wallets/generate', requireAuth, (req, res) => {
+app.post('/api/wallets/generate', requireAdmin, (req, res) => {
   const { count = 1, label_prefix = 'wallet', network = 'solana' } = req.body || {};
   const n = Math.min(Math.max(Number(count) || 1, 1), 100);
   if (network !== 'solana') return res.status(400).json({ error: 'only solana supported now' });
@@ -319,10 +346,11 @@ app.post('/api/wallets/generate', requireAuth, (req, res) => {
   res.json({ created });
 });
 
-app.get('/api/wallets/:id/reveal', requireAuth, (req, res) => {
+app.get('/api/wallets/:id/reveal', requireAdmin, (req, res) => {
   const row = db.prepare('SELECT * FROM wallets WHERE id = ?').get(Number(req.params.id));
   if (!row) return res.status(404).json({ error: 'not found' });
   try {
+    res.set('Cache-Control', 'no-store');
     const secret = wallet.decryptSecret(row.secret_key_enc, row.iv, row.auth_tag);
     const bs58 = require('bs58').default || require('bs58');
     res.json({
@@ -338,16 +366,18 @@ app.get('/api/wallets/:id/reveal', requireAuth, (req, res) => {
   }
 });
 
-app.put('/api/wallets/:id', requireAuth, (req, res) => {
+app.put('/api/wallets/:id', requireAdmin, (req, res) => {
   const { label } = req.body || {};
   db.prepare('UPDATE wallets SET label = ? WHERE id = ?').run(label || null, Number(req.params.id));
   res.json({ ok: true });
 });
 
-app.delete('/api/wallets/:id', requireAuth, (req, res) => {
+app.delete('/api/wallets/:id', requireAdmin, (req, res) => {
   db.prepare('DELETE FROM wallets WHERE id = ?').run(Number(req.params.id));
   res.json({ ok: true });
 });
+
+app.get('/health', (req, res) => res.json({ status: 'healthy' }));
 
 app.use(express.static(path.join(__dirname, '..', 'frontend')));
 app.use((req, res, next) => {

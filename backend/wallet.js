@@ -3,7 +3,8 @@ const nacl = require('tweetnacl');
 const bs58 = require('bs58').default || require('bs58');
 
 function getKey() {
-  const seed = process.env.WALLET_ENCRYPTION_KEY || process.env.SESSION_SECRET || 'dev-fallback-key';
+  const seed = process.env.WALLET_ENCRYPTION_KEY;
+  if (!seed || seed.length < 32) throw new Error('WALLET_ENCRYPTION_KEY is required and must be at least 32 characters');
   return crypto.scryptSync(seed, 'ss-rayfaz-wallet-v1', 32);
 }
 
