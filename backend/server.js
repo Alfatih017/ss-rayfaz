@@ -123,6 +123,63 @@ app.get('/api/wallets/rotation/state', requireAdmin, (req, res) => {
   res.json(state || { last_wallet_id: null, last_wallet_public_key: null, last_rotation_at: null, label: null });
 });
 
+// --- Auto-sweep: transfer entire SOL balance from current rotation wallet to next ---
+app.post('/api/wallets/rotation/sweep', requireAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  // Require active session unlock
+  if (!walletSession.isUnlocked(req.session.id))
+    return res.status(403).json({ error: 'wallet session not unlocked' });
+
+  const rotState = db.prepare('SELECT last_wallet_id FROM wallet_rotation_state WHERE id = 1').get();
+  if (!rotState?.last_wallet_id)
+    return res.status(400).json({ error: 'no wallet has been used for rotation yet' });
+
+  const sourceId = rotState.last_wallet_id;
+  const source = db.prepare('SELECT id, label, public_key FROM wallets WHERE id = ?').get(sourceId);
+  if (!source) return res.status(404).json({ error: 'source wallet not found' });
+
+  // Determine next wallet in rotation
+  const pool = db.prepare('SELECT id, label, public_key FROM wallets WHERE rotation_enabled = 1 ORDER BY id').all();
+  if (pool.length < 2) return res.status(400).json({ error: 'need at least 2 wallets in rotation pool' });
+  const lastPos = pool.findIndex(w => w.id === sourceId);
+  const nextIndex = lastPos >= 0 ? (lastPos + 1) % pool.length : 0;
+  const dest = pool[nextIndex];
+
+  // Get decrypted key from session
+  const secretKey = walletSession.getKey(req.session.id, sourceId);
+  if (!secretKey) return res.status(403).json({ error: 'source wallet key not available in session' });
+
+  try {
+    const result = await solanaTransfer.sweep({
+      secretKey,
+      sourceId: source.id,
+      sourceLabel: source.label,
+      destination: dest.public_key,
+      owner: req.session.userId
+    });
+    // Log the transfer
+    db.prepare('INSERT INTO sol_transfer_log(source_wallet_id,destination,amount_lamports,fee_lamports,signature) VALUES(?,?,?,?,?)')
+      .run(result.sourceId, result.destination, result.amountLamports, result.feeLamports, result.signature);
+    // Log the secret access
+    db.prepare('INSERT INTO secret_access_log (user_id, wallet_id, action, source_ip) VALUES (?, ?, ?, ?)')
+      .run(req.session.userId, sourceId, 'sweep_sign', clientIp(req));
+    // Advance rotation pointer to destination
+    db.prepare('UPDATE wallet_rotation_state SET last_wallet_id = ?, last_wallet_public_key = ?, last_rotation_at = datetime(\'now\'), updated_at = datetime(\'now\') WHERE id = 1')
+      .run(dest.id, dest.public_key);
+    res.json({
+      ok: true,
+      signature: result.signature,
+      explorerUrl: result.explorerUrl,
+      fromWallet: { id: source.id, label: source.label, publicKey: source.public_key },
+      toWallet: { id: dest.id, label: dest.label, publicKey: dest.public_key },
+      amountLamports: result.amountLamports,
+      feeLamports: result.feeLamports
+    });
+  } catch (e) {
+    res.status(e.status || 502).json({ error: e.message });
+  }
+});
+
 app.post('/api/auth/login', loginRateLimit, (req, res, next) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'missing fields' });

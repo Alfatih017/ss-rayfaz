@@ -30,4 +30,42 @@ async function preview({secretKey,sourceId,sourceLabel,destination,amountSol,own
   return{previewToken:token,expiresAt:new Date(expiresAt).toISOString(),sourceId,sourceLabel,sourceAddress:String(signer.address),destination:String(destinationAddress),amountLamports:String(amount),amountSol:amountNumber,feeLamports:String(fee),feeSol:toSafeNumber(fee)/1e9,balanceAfterSol:toSafeNumber(balanceResponse.value-amount-fee)/1e9,signature:String(getSignatureFromTransaction(signed))};
 }
 async function confirm(token,owner){const item=previews.get(token);previews.delete(token);if(!item||item.owner!==owner||item.expiresAt<Date.now())throw Object.assign(Error('preview expired or already used'),{status:409});const signature=String(getSignatureFromTransaction(item.signed));const rpcSubscriptions=createSolanaRpcSubscriptions(mainnet(process.env.SOLANA_WS_URL||'wss://api.mainnet-beta.solana.com'));await sendAndConfirmTransactionFactory({rpc,rpcSubscriptions})(item.signed,{commitment:'confirmed',preflightCommitment:'confirmed',skipPreflight:false});return{signature,sourceId:item.sourceId,destination:item.destination,amountLamports:item.amountLamports,feeLamports:item.feeLamports,explorerUrl:`https://explorer.solana.com/tx/${encodeURIComponent(signature)}`};}
-module.exports={balances,preview,confirm};
+
+/**
+ * Sweep entire SOL balance (minus fee) from source to destination.
+ * Uses pre-decrypted secret key from session unlock — no password re-prompt.
+ * Returns the broadcast result or throws on failure.
+ */
+async function sweep({secretKey,sourceId,sourceLabel,destination,owner}){
+  if(!isAddress(destination))throw Object.assign(Error('invalid Solana destination'),{status:400});
+  const signer=await createKeyPairSignerFromBytes(new Uint8Array(secretKey));const destinationAddress=address(destination);
+  if(signer.address===destinationAddress)throw Object.assign(Error('source and destination must differ'),{status:400});
+  const [balanceResponse,blockhashResponse]=await Promise.all([rpc.getBalance(signer.address,{commitment:'confirmed'}).send(),rpc.getLatestBlockhash({commitment:'confirmed'}).send()]);
+  // Build a dummy tx to estimate fee, then sweep balance - fee
+  const msg0=pipe(createTransactionMessage({version:0}),m=>setTransactionMessageFeePayerSigner(signer,m),m=>setTransactionMessageLifetimeUsingBlockhash(blockhashResponse.value,m),m=>appendTransactionMessageInstruction(instruction(signer,destinationAddress,1n),m));
+  const compiled0=compileTransactionMessage(msg0);const encoded0=getCompiledTransactionMessageEncoder().encode(compiled0);const fee=(await rpc.getFeeForMessage(Buffer.from(encoded0).toString('base64'),{commitment:'confirmed'}).send()).value;
+  if(fee===null)throw Object.assign(Error('cannot estimate fee'),{status:502});
+  const balance=BigInt(balanceResponse.value);
+  if(balance<=BigInt(fee))throw Object.assign(Error('balance too low to sweep after fee'),{status:409});
+  const amount=balance-BigInt(fee);
+  const message=pipe(createTransactionMessage({version:0}),m=>setTransactionMessageFeePayerSigner(signer,m),m=>setTransactionMessageLifetimeUsingBlockhash(blockhashResponse.value,m),m=>appendTransactionMessageInstruction(instruction(signer,destinationAddress,amount),m));
+  const compiled=compileTransactionMessage(message);const encoded=getCompiledTransactionMessageEncoder().encode(compiled);const realFee=(await rpc.getFeeForMessage(Buffer.from(encoded).toString('base64'),{commitment:'confirmed'}).send()).value;
+  // Recalculate with real fee (may differ from dummy)
+  let finalAmount=amount;let finalFee=fee;
+  if(realFee!==null&&BigInt(realFee)!==BigInt(fee)){finalFee=realFee;if(balance<=BigInt(finalFee))throw Object.assign(Error('balance too low to sweep after fee'),{status:409});finalAmount=balance-BigInt(finalFee);}
+  // Rebuild with correct amount if fee changed
+  let signed;
+  if(finalAmount!==amount){
+    const msg=pipe(createTransactionMessage({version:0}),m=>setTransactionMessageFeePayerSigner(signer,m),m=>setTransactionMessageLifetimeUsingBlockhash(blockhashResponse.value,m),m=>appendTransactionMessageInstruction(instruction(signer,destinationAddress,finalAmount),m));
+    signed=await signTransactionMessageWithSigners(msg);
+  }else{
+    signed=await signTransactionMessageWithSigners(message);
+  }
+  const wire=getBase64EncodedWireTransaction(signed);const simulation=(await rpc.simulateTransaction(wire,{encoding:'base64',commitment:'confirmed',sigVerify:true}).send()).value;
+  if(simulation.err!==null)throw Object.assign(Error('transaction simulation failed'),{status:409});
+  const signature=String(getSignatureFromTransaction(signed));
+  const rpcSubscriptions=createSolanaRpcSubscriptions(mainnet(process.env.SOLANA_WS_URL||'wss://api.mainnet-beta.solana.com'));
+  await sendAndConfirmTransactionFactory({rpc,rpcSubscriptions})(signed,{commitment:'confirmed',preflightCommitment:'confirmed',skipPreflight:false});
+  return{signature,sourceId,destination:String(destinationAddress),amountLamports:String(finalAmount),feeLamports:String(finalFee),balanceBeforeLamports:String(balance),explorerUrl:`https://explorer.solana.com/tx/${encodeURIComponent(signature)}`};
+}
+module.exports={balances,preview,confirm,sweep};

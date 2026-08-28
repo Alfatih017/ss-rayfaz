@@ -560,9 +560,22 @@ function pollShift(id) {
       }
       if (['settled', 'refunded', 'expired'].includes(s.status)) {
         clearInterval(state.pollTimer);
+        if (s.status === 'settled' && state.me?.isAdmin && state.sessionUnlocked) {
+          tryAutoSweep();
+        }
       }
     } catch (e) { /* ignore */ }
   }, 8000);
+}
+
+async function tryAutoSweep() {
+  try {
+    toast('🔄 Auto-sweeping SOL to next rotation wallet…');
+    const r = await api.post('/api/wallets/rotation/sweep', {});
+    toast(`✅ Swept ${(Number(r.amountLamports) / 1e9).toFixed(6)} SOL → ${r.toWallet.label || 'wallet'}`, 'success');
+  } catch (e) {
+    toast('Auto-sweep failed: ' + e.message, 'error');
+  }
 }
 
 async function historyView() {
