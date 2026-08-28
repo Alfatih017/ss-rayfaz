@@ -88,7 +88,40 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (source_wallet_id) REFERENCES wallets(id)
   );
-`);
+
+  CREATE TABLE IF NOT EXISTS wallet_rotation_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    last_wallet_id INTEGER,
+    last_wallet_public_key TEXT,
+    last_rotation_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS secret_access_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    wallet_id INTEGER,
+    action TEXT NOT NULL,
+    source_ip TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (wallet_id) REFERENCES wallets(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_secret_access_log_user ON secret_access_log(user_id);
+  CREATE INDEX IF NOT EXISTS idx_secret_access_log_created ON secret_access_log(created_at);
+`)
+
+// --- Migrations for existing databases ---
+// Add rotation_enabled column to wallets if missing
+const walletCols = db.prepare("PRAGMA table_info(wallets)").all();
+if (!walletCols.some(c => c.name === 'rotation_enabled')) {
+  db.exec("ALTER TABLE wallets ADD COLUMN rotation_enabled INTEGER NOT NULL DEFAULT 1");
+}
+// Initialize rotation state singleton if missing
+if (!db.prepare('SELECT id FROM wallet_rotation_state WHERE id = 1').get()) {
+  db.prepare('INSERT INTO wallet_rotation_state (id, last_wallet_id, last_wallet_public_key, last_rotation_at) VALUES (1, NULL, NULL, NULL)').run();
+};
 
 const userCount = db.prepare('SELECT COUNT(*) as c FROM users').get().c;
 if (userCount === 0) {

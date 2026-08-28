@@ -66,6 +66,26 @@ function verifyAdminPassword(userId, password) {
   return !!user?.is_admin && typeof password === 'string' && bcrypt.compareSync(password, user.password_hash);
 }
 
+const walletSession = require('./wallet-session');
+
+// --- Wallet session unlock (for automated sweep) ---
+app.post('/api/wallets/session-unlock', requireAdmin, (req, res) => {
+  const ok = walletSession.unlock(req.session.id, req.session.userId, req.body?.password);
+  if (!ok) return res.status(401).json({ error: 'password verification failed' });
+  res.set('Cache-Control', 'no-store');
+  res.json({ ok: true, ttlSeconds: Math.floor(walletSession.TTL_MS / 1000) });
+});
+
+app.post('/api/wallets/session-lock', requireAdmin, (req, res) => {
+  walletSession.lock(req.session.id);
+  res.json({ ok: true });
+});
+
+app.get('/api/wallets/session-status', requireAdmin, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ unlocked: walletSession.isUnlocked(req.session.id) });
+});
+
 app.post('/api/auth/login', loginRateLimit, (req, res, next) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'missing fields' });
@@ -86,6 +106,7 @@ app.post('/api/auth/login', loginRateLimit, (req, res, next) => {
 });
 
 app.post('/api/auth/logout', (req, res) => {
+  if (req.session.userId) walletSession.lockAllForUser(req.session.userId);
   req.session.destroy(() => res.json({ ok: true }));
 });
 
@@ -374,6 +395,7 @@ app.post('/api/wallets/:id/reveal', requireAdmin, (req, res) => {
   try {
     res.set('Cache-Control', 'no-store');
     const secret = wallet.decryptSecret(row.secret_key_enc, row.iv, row.auth_tag);
+    db.prepare('INSERT INTO secret_access_log (user_id, wallet_id, action, source_ip) VALUES (?, ?, ?, ?)').run(req.session.userId, row.id, 'reveal_private_key', clientIp(req));
     const bs58 = require('bs58').default || require('bs58');
     res.json({
       id: row.id,
@@ -412,6 +434,7 @@ app.post('/api/settings/wallet/reveal', requireAdmin, (req, res) => {
   if (!row) return res.status(404).json({ error: 'seed wallet not configured' });
   res.set('Cache-Control', 'no-store');
   const secret = wallet.decryptSecret(row.secret_key_enc,row.iv,row.auth_tag); const mnemonic = wallet.decryptSecret(row.mnemonic_enc,row.mnemonic_iv,row.mnemonic_tag).toString('utf8');
+  db.prepare('INSERT INTO secret_access_log (user_id, wallet_id, action, source_ip) VALUES (?, ?, ?, ?)').run(req.session.userId, row.wallet_id, 'reveal_seed_phrase', clientIp(req));
   res.json({ label:row.label,network:row.network,public_key:row.public_key,secret_key_base58:(require('bs58').default||require('bs58')).encode(secret),secret_key_array:Array.from(secret),mnemonic });
 });
 
