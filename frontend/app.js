@@ -51,7 +51,8 @@ const state = {
   view: 'swap',
   activeShift: null,
   pollTimer: null,
-  prefillSwap: null
+  prefillSwap: null,
+  sessionUnlocked: false
 };
 
 async function loadTokens() {
@@ -87,6 +88,30 @@ function nav() {
   if (state.me?.isAdmin) links.push({ id: 'admin', label: 'Tokens' });
   links.push({ id: 'account', label: 'Account' });
 
+  const unlockBadge = state.me?.isAdmin
+    ? h('span', {
+        class: `unlock-badge ${state.sessionUnlocked ? 'unlocked' : 'locked'}`,
+        title: state.sessionUnlocked ? 'Wallet session unlocked — auto-sweep ready' : 'Wallet session locked — tap to unlock',
+        onclick: async () => {
+          if (state.sessionUnlocked) {
+            await api.post('/api/wallets/session-lock');
+            state.sessionUnlocked = false;
+            toast('Wallet session locked', 'success');
+            render();
+          } else {
+            const password = prompt('Enter account password to unlock wallet session for auto-sweep:');
+            if (!password) return;
+            try {
+              await api.post('/api/wallets/session-unlock', { password });
+              state.sessionUnlocked = true;
+              toast('Wallet session unlocked for 30 minutes', 'success');
+              render();
+            } catch (e) { toast(e.message, 'error'); }
+          }
+        }
+      }, state.sessionUnlocked ? '🔓 Unlocked' : '🔒 Locked')
+    : null;
+
   return h('div', { class: 'nav' },
     brandMark(),
     h('div', { class: 'links' },
@@ -95,6 +120,7 @@ function nav() {
         onclick: () => { state.view = l.id; render(); }
       }, l.label))
     ),
+    unlockBadge,
     h('div', { class: 'user' },
       h('span', { class: 'dot' }),
       state.me?.username || ''
@@ -209,6 +235,18 @@ function swapView() {
   const estOutput = h('input', { class: 'amt', type: 'text', placeholder: '0.00', readonly: true });
   const settleAddrInput = h('input', { type: 'text', placeholder: 'Destination address' });
   if (prefill?.settleAddress) settleAddrInput.value = prefill.settleAddress;
+  const settleAddrLabel = h('div', { class: 'muted', style: 'font-size:11px; margin-top:4px;' }, '');
+  async function loadRotationAddress() {
+    if (!state.me?.isAdmin) return;
+    try {
+      const r = await api.get('/api/wallets/rotation/next');
+      settleAddrInput.value = r.publicKey;
+      settleAddrInput.readOnly = true;
+      settleAddrLabel.textContent = `🔄 Rotasi #${r.nextIndex + 1}/${r.poolSize} · ${r.label || 'Unlabeled'}`;
+    } catch {
+      settleAddrLabel.textContent = '';
+    }
+  }
   const refundAddrInput = h('input', { type: 'text', placeholder: 'Refund address (recommended)' });
   const memoInput = h('input', { type: 'text', placeholder: 'Destination memo (optional)' });
 
@@ -413,6 +451,7 @@ function swapView() {
 
   setCurrency('coin');
   Promise.all([loadFromUsdPrice(), loadToUsdPrice()]).then(refreshPair);
+  loadRotationAddress();
 
   return h('div', { class: 'container' },
     h('div', { class: 'card' },
@@ -443,7 +482,8 @@ function swapView() {
       rateBox,
       h('div', { class: 'field-group' },
         h('label', {}, 'Destination address'),
-        settleAddrInput
+        settleAddrInput,
+        settleAddrLabel
       ),
       h('div', { class: 'field-group' },
         h('label', {}, 'Refund address'),
@@ -1110,6 +1150,9 @@ async function init() {
     if (me.authenticated) {
       state.me = me;
       await loadTokens();
+      if (me.isAdmin) {
+        try { const s = await api.get('/api/wallets/session-status'); state.sessionUnlocked = !!s.unlocked; } catch {}
+      }
     }
   } catch {}
   render();

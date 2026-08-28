@@ -86,6 +86,43 @@ app.get('/api/wallets/session-status', requireAdmin, (req, res) => {
   res.json({ unlocked: walletSession.isUnlocked(req.session.id) });
 });
 
+// --- Wallet rotation: round-robin pool selection ---
+app.get('/api/wallets/rotation/next', requireAdmin, (req, res) => {
+  const pool = db.prepare(
+    'SELECT id, label, public_key FROM wallets WHERE rotation_enabled = 1 ORDER BY id'
+  ).all();
+  if (!pool.length) return res.status(404).json({ error: 'no wallets available for rotation' });
+
+  const state = db.prepare('SELECT last_wallet_id FROM wallet_rotation_state WHERE id = 1').get();
+  let nextIndex = 0;
+  if (state?.last_wallet_id != null) {
+    const lastPos = pool.findIndex(w => w.id === state.last_wallet_id);
+    nextIndex = lastPos >= 0 ? (lastPos + 1) % pool.length : 0;
+  }
+  const next = pool[nextIndex];
+  db.prepare(
+    'UPDATE wallet_rotation_state SET last_wallet_id = ?, last_wallet_public_key = ?, last_rotation_at = datetime(\'now\'), updated_at = datetime(\'now\') WHERE id = 1'
+  ).run(next.id, next.public_key);
+
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    walletId: next.id,
+    label: next.label,
+    publicKey: next.public_key,
+    poolSize: pool.length,
+    nextIndex
+  });
+});
+
+// Peek current rotation state without advancing
+app.get('/api/wallets/rotation/state', requireAdmin, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const state = db.prepare(
+    'SELECT rs.last_wallet_id, rs.last_wallet_public_key, rs.last_rotation_at, w.label FROM wallet_rotation_state rs LEFT JOIN wallets w ON w.id = rs.last_wallet_id WHERE rs.id = 1'
+  ).get();
+  res.json(state || { last_wallet_id: null, last_wallet_public_key: null, last_rotation_at: null, label: null });
+});
+
 app.post('/api/auth/login', loginRateLimit, (req, res, next) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'missing fields' });
