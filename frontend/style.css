@@ -823,6 +823,8 @@ table { min-width:720px; }
 .advanced-fields summary { min-height:34px; cursor:pointer; font-size:13px; }
 .advanced-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
 .shift-submit { width:calc(100% - 28px); margin:0 14px 14px; min-height:44px; font-size:14px; background:linear-gradient(90deg,var(--ds-violet),#4ab8e0); }
+.button-spinner { display:inline-block; width:15px; height:15px; border:2px solid rgba(255,255,255,.35); border-top-color:#fff; border-radius:50%; vertical-align:-3px; animation:buttonSpin .7s linear infinite; }
+@keyframes buttonSpin { to { transform:rotate(360deg); } }
 
 @media (max-width: 860px) {
   .nav { flex-wrap:wrap; }

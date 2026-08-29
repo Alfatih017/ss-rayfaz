@@ -416,7 +416,12 @@ function swapView() {
     refreshPair();
   }
 
+  let submit;
   async function createShift() {
+    if (submit.disabled) return;
+    submit.disabled = true;
+    submit.innerHTML = '';
+    submit.append(h('span',{class:'button-spinner','aria-hidden':'true'}),document.createTextNode(' Memproses swap…'));
     try {
       if (state.me?.isAdmin) {
         const monetization = await api.get('/api/settings/monetization');
@@ -436,11 +441,7 @@ function swapView() {
           settleCoin: tc, settleNetwork: tn,
           depositAmount: coinAmt
         });
-        shift = await api.post('/api/shifts/fixed', {
-          quoteId: quote.id, settleAddress,
-          refundAddress: refundAddrInput.value.trim() || undefined,
-          settleMemo: memoInput.value.trim() || undefined
-        });
+        shift = await api.post('/api/shifts/fixed', {quoteId:quote.id,settleAddress,refundAddress:refundAddrInput.value.trim()||undefined,settleMemo:memoInput.value.trim()||undefined});
       } else {
         shift = await api.post('/api/shifts/variable', {
           depositCoin: fc, depositNetwork: fn,
@@ -454,10 +455,13 @@ function swapView() {
       result.innerHTML = '';
       result.appendChild(renderShiftBox(shift));
       pollShift(shift.id);
-      toast('Shift created — send your deposit', 'success');
+      toast('Shift dibuat — kirim deposit Anda','success');
       result.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (e) {
       toast(e.message, 'error');
+    } finally {
+      submit.disabled = false;
+      submit.textContent = 'Kirim swap';
     }
   }
 
@@ -513,7 +517,7 @@ function swapView() {
           )
         )
       ),
-      h('button', { class: 'shift-submit', onclick: createShift }, 'Kirim swap')
+      submit = h('button', { class: 'shift-submit', onclick: createShift }, 'Kirim swap')
     ),
     result
   );
@@ -521,6 +525,8 @@ function swapView() {
 
 function renderShiftBox(s) {
   const fmtDate = (d) => d ? new Date(d).toLocaleString() : '—';
+  if(s.status==='settling')return h('div',{class:'card settlement-progress'},h('div',{class:'eyebrow'},`Shift · ${s.type}`),h('div',{class:'settlement-visual'},h('span',{class:'asset-icon asset-icon-send'},s.depositCoin?.slice(0,2)||'IN'),h('span',{class:'settlement-arrow'},'→'),h('span',{class:'asset-icon asset-icon-receive'},s.settleCoin?.slice(0,2)||'OUT')),h('h1',{},`Sedang mengirim ${s.settleAmount||'—'} ${s.settleCoin||''}…`),h('div',{class:'button-spinner','aria-hidden':'true'}),h('div',{class:'settlement-meta'},h('span',{},`Order: ${s.id||'—'}`),h('span',{},`Dibuat: ${fmtDate(s.createdAt||s.created_at)}`)));
+  if(s.status==='settled')return h('div',{class:'card settled-summary'},h('div',{class:'eyebrow'},`Shift · ${s.type}`),h('h1',{},'Settled berhasil'),h('span',{class:'status settled'},'Settled'),h('div',{class:'metric-grid'},h('div',{class:'metric metric-violet'},h('span',{},'Wallet tujuan'),h('strong',{class:'mono'},s.settleAddress||'—')),h('div',{class:'metric metric-cyan'},h('span',{},'Coin'),h('strong',{},s.settleCoin||'—')),h('div',{class:'metric metric-amber'},h('span',{},'Amount'),h('strong',{},`${s.settleAmount||'—'} ${s.settleCoin||''}`))),h('div',{class:'summary-row'},h('span',{class:'k'},'Shift ID'),h('span',{class:'v mono'},s.id||'—')));
   return h('div', { class: 'card' },
     h('div', { class: 'eyebrow' }, `Shift · ${s.type}`),
     h('h1', { style: 'font-size: 22px;' }, 'Awaiting deposit'),
@@ -548,7 +554,7 @@ function renderShiftBox(s) {
           navigator.clipboard.writeText(s.depositAddress || '');
           toast('Address copied', 'success');
         }
-      }, 'Copy address')
+      }, 'Copy address'),
     ),
     h('div', { class: 'divider' }),
     h('div', { class: 'summary-row' },
@@ -577,22 +583,9 @@ function pollShift(id) {
       }
       if (['settled', 'refunded', 'expired'].includes(s.status)) {
         clearInterval(state.pollTimer);
-        if (s.status === 'settled' && state.me?.isAdmin && state.sessionUnlocked) {
-          tryAutoSweep();
-        }
       }
     } catch (e) { /* ignore */ }
   }, 8000);
-}
-
-async function tryAutoSweep() {
-  try {
-    toast('🔄 Auto-sweeping SOL to next rotation wallet…');
-    const r = await api.post('/api/wallets/rotation/sweep', {});
-    toast(`✅ Swept ${(Number(r.amountLamports) / 1e9).toFixed(6)} SOL → ${r.toWallet.label || 'wallet'}`, 'success');
-  } catch (e) {
-    toast('Auto-sweep failed: ' + e.message, 'error');
-  }
 }
 
 async function historyView() {
@@ -1129,8 +1122,11 @@ function accountView() {
   refreshWalletStatus();
   const affiliateId=h('input',{placeholder:'Account ID SideShift (opsional)'});
   const commissionRate=h('input',{type:'number',min:'0',max:'2',step:'0.1',placeholder:'Kosongkan atau isi 0–2'});
+  const rpcUrls=h('textarea',{rows:5,placeholder:'Satu HTTPS RPC URL per baris\nMaksimal 10 endpoint'});
+  const rpcStatus=h('div',{class:'muted'},'Memuat konfigurasi RPC…');
   const loadMonetization=async()=>{try{const s=await api.get('/api/settings/monetization');affiliateId.value=s.affiliateId||'';commissionRate.value=s.commissionRate===''?'':s.commissionRate;}catch(e){toast('Pengaturan komisi gagal dimuat: '+e.message,'error');}};
   if(state.me.isAdmin)loadMonetization();
+  if(state.me.isAdmin)api.get('/api/settings/solana-rpc').then(s=>{rpcStatus.textContent=s.count?`${s.count} RPC aktif: ${s.endpoints.map(x=>x.label).join(', ')}`:'Menggunakan RPC default server';}).catch(()=>rpcStatus.textContent='Konfigurasi RPC gagal dimuat');
   return h('section', { class: 'dashboard-section', id:'settings' },
     h('div', { class: 'card' },
       h('div', { class: 'eyebrow' }, 'Profile'),
@@ -1161,6 +1157,12 @@ function accountView() {
       state.me.isAdmin ? h('div',{class:'muted',style:'margin-bottom:14px'},'Affiliate ID wajib untuk membuat swap (Account ID SideShift). Commission rate disimpan sebagai catatan, tetapi tidak dikirim karena endpoint SideShift saat ini menolak parameter tersebut; atur rate efektif di dashboard SideShift.') : null,
       state.me.isAdmin ? h('div',{class:'settings-grid'},h('div',{},h('label',{},'Affiliate ID'),affiliateId),h('div',{},h('label',{},'Commission rate (%)'),commissionRate)) : null,
       state.me.isAdmin ? h('button',{onclick:async()=>{try{await api.put('/api/settings/monetization',{affiliateId:affiliateId.value,commissionRate:commissionRate.value});toast('Affiliate ID tersimpan; rate dikelola di dashboard SideShift','success');}catch(e){toast(e.message,'error');}}},'Simpan pengaturan') : null
+      ,state.me.isAdmin?h('div',{class:'divider'}):null,
+      state.me.isAdmin?h('h2',{},'Solana RPC rotation'):null,
+      state.me.isAdmin?h('div',{class:'muted',style:'margin-bottom:12px'},'Masukkan satu HTTPS RPC URL per baris. URL disimpan terenkripsi dan dipilih round-robin untuk pembacaan saldo. Kosongkan untuk kembali ke RPC default.'):null,
+      state.me.isAdmin?rpcUrls:null,
+      state.me.isAdmin?h('button',{onclick:async()=>{if(!state.sessionUnlocked)return toast('Buka wallet untuk mengubah RPC','error');try{const r=await api.put('/api/settings/solana-rpc',{urls:rpcUrls.value});rpcStatus.textContent=r.count?`${r.count} RPC aktif`:'Menggunakan RPC default server';rpcUrls.value='';toast('Konfigurasi RPC tersimpan','success');}catch(e){toast(e.message,'error');}}},'Simpan RPC'):null,
+      state.me.isAdmin?rpcStatus:null
     )
   );
 }

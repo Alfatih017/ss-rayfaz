@@ -75,8 +75,6 @@ assert.match(server, /api\/wallets\/rotation\/sweep/);
 assert.match(server, /wallet session not unlocked/);
 assert.match(transfer, /sweep/);
 assert.match(transfer, /balance too low to sweep after fee/);
-assert.match(frontend, /tryAutoSweep/);
-assert.match(frontend, /rotation\/sweep/);
 assert.match(server, /sweep_sign/);
 // --- Session-scoped unlock, optional monetization, and one-page dashboard ---
 assert.match(walletSession, /SESSION_SCOPED/);
@@ -102,5 +100,17 @@ assert.match(frontend, /Pilih address/);
 assert.match(frontend, /Kirim swap/);
 assert.match(frontend, /swap-steps/);
 assert.match(frontend, /asset-pair/);
+// --- Loading, settlement presentation, and safe-read RPC rotation ---
+assert.match(frontend, /submit\.disabled = true/);
+assert.match(frontend, /button-spinner/);
+assert.match(server, /settings\/solana-rpc/);
+assert.match(transfer, /nextRpc/);
+assert.match(transfer, /transactionRpc/);
+assert.match(transfer, /setRpcUrls/);
+assert.match(server, /RPC URL harus menggunakan HTTPS/);
+assert.doesNotMatch(server, /u\.host/);
+assert.match(frontend, /Settled berhasil/);
+assert.match(frontend, /Sedang mengirim/);
+assert.match(frontend, /Solana RPC rotation/);
 assert.doesNotMatch(frontend, /unlocked for 30 minutes/);
 console.log('security contract: ok');

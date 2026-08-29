@@ -280,6 +280,31 @@ app.put('/api/settings/monetization', requireAdmin, (req, res) => {
   res.json({ ok: true, affiliateId, commissionRate: commissionRate ?? '' });
 });
 
+function rpcSettingRows() {
+  const raw=getSetting('solana_rpc_urls_enc');if(!raw?.value)return [];
+  const payload=JSON.parse(raw.value);return JSON.parse(wallet.decryptSecret(payload.enc,payload.iv,payload.tag).toString('utf8'));
+}
+
+app.get('/api/settings/solana-rpc', requireAdmin, (req,res) => {
+  res.set('Cache-Control','no-store');
+  const rows=rpcSettingRows();
+  res.json({count:rows.length,endpoints:rows.map((value,index)=>({index,label:`RPC ${index+1}`}))});
+});
+
+app.put('/api/settings/solana-rpc', requireAdmin, requireWalletUnlock, (req,res) => {
+  const urls=String(req.body?.urls??'').split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+  if(urls.length>10)return res.status(400).json({error:'maksimal 10 RPC URL'});
+  try{for(const value of urls){if(value.length>500)throw Error('RPC URL terlalu panjang');const u=new URL(value);if(u.protocol!=='https:')throw Error('RPC URL harus menggunakan HTTPS');if(u.username||u.password)throw Error('RPC URL tidak boleh memakai username atau password');}}
+  catch{return res.status(400).json({error:'RPC URL tidak valid; gunakan HTTPS tanpa credentials'});}
+  const encrypted=urls.length?wallet.encryptSecret(Buffer.from(JSON.stringify(urls))):null;
+  db.prepare(`INSERT INTO app_settings(key,value,updated_at) VALUES('solana_rpc_urls_enc',?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=datetime('now')`)
+    .run(encrypted?JSON.stringify({enc:encrypted.enc,iv:encrypted.iv,tag:encrypted.tag}):null);
+  solanaTransfer.setRpcUrls(urls);
+  res.json({ok:true,count:urls.length});
+});
+
+try{solanaTransfer.setRpcUrls(rpcSettingRows());}catch{}
+
 app.get('/api/tokens', requireAuth, (req, res) => {
   const rows = db.prepare(
     'SELECT id, coin, network, label, enabled, sort_order FROM tokens WHERE enabled = 1 ORDER BY sort_order, id'

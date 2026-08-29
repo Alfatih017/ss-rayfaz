@@ -34,3 +34,10 @@
 - `cd backend && npm audit --omit=dev`
 - `node --check backend/server.js && node --check backend/wallet-session.js && node --check frontend/app.js`
 - Browser verified locally with disposable SQLite data at desktop 1440×900 and mobile 375×812.
+
+## Settlement UI and RPC rotation
+
+- Automatic fixed-shift funding and new remainder-sweep automation are intentionally not deployed: the draft failed financial-safety review for crash-after-broadcast reconciliation and wallet reservation.
+- Settled shift UI hides deposit address/amount and shows destination wallet, settle coin, settle amount, and shift ID.
+- Settling shift UI shows a focused progress state with the real settle amount/coin and order metadata.
+- `GET/PUT /api/settings/solana-rpc` manages up to 10 encrypted HTTPS RPC URLs; GET exposes sanitized protocol/host labels only. Rotation is used only for safe balance reads. Transaction preview/simulation/broadcast remains pinned to `SOLANA_RPC_URL` for consistency.
