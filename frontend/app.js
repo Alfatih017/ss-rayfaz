@@ -460,49 +460,57 @@ function swapView() {
 
   setCurrency('coin');
   Promise.all([loadFromUsdPrice(), loadToUsdPrice()]).then(refreshPair);
-  return h('div', { class: 'container' },
-    h('div', { class: 'card' },
-      h('div', { class: 'eyebrow' }, 'Exchange'),
-      h('h1', {}, 'Swap with assured custody'),
-      h('div', { class: 'muted', style: 'margin: 6px 0 26px;' },
-        'Direct-to-wallet shifts. No deposits held by us.'),
-      modeBox,
-      h('div', { class: 'swap-field' },
-        h('div', { class: 'field-head' },
-          h('label', { style: 'margin:0' }, 'You send'),
-          h('div', { class: 'field-tools' }, minBtn, currencyToggle)
+  const fromAssetCode = h('strong', { class: 'asset-code' }, from.split(':')[0]);
+  const fromAssetNetwork = h('span', { class: 'asset-network' }, from.split(':')[1]);
+  const fromAssetIcon = h('span', { class: 'asset-icon asset-icon-send' }, from.split(':')[0].slice(0, 2));
+  const toAssetCode = h('strong', { class: 'asset-code' }, to.split(':')[0]);
+  const toAssetNetwork = h('span', { class: 'asset-network' }, to.split(':')[1]);
+  const toAssetIcon = h('span', { class: 'asset-icon asset-icon-receive' }, to.split(':')[0].slice(0, 2));
+  const syncAssetLabels = () => {
+    const [fc, fn] = from.split(':'); const [tc, tn] = to.split(':');
+    fromAssetCode.textContent = fc; fromAssetNetwork.textContent = fn; fromAssetIcon.textContent = fc.slice(0, 2);
+    toAssetCode.textContent = tc; toAssetNetwork.textContent = tn; toAssetIcon.textContent = tc.slice(0, 2);
+  };
+  fromSel.addEventListener('change', syncAssetLabels);
+  toSel.addEventListener('change', syncAssetLabels);
+
+  return h('div', { class: 'container swap-container' },
+    h('div', { class: 'card swap-console' },
+      h('div', { class: 'swap-steps', 'aria-label': 'Tahapan swap' },
+        h('span', { class: 'active' }, '1', h('b', {}, 'Pilih aset')),
+        h('span', {}, '2', h('b', {}, 'Kirim deposit')),
+        h('span', {}, '3', h('b', {}, 'Terima aset'))
+      ),
+      h('div', { class: 'swap-console-head' }, modeBox, rateBox),
+      h('div', { class: 'asset-pair' },
+        h('section', { class: 'asset-panel' },
+          h('div', { class: 'asset-panel-main' }, fromAssetIcon,
+            h('div', { class: 'asset-meta' }, h('span', {}, 'Anda kirim'), fromAssetCode, fromAssetNetwork), fromSel),
+          h('div', { class: 'asset-amount-row' },
+            h('div', { class: 'asset-amount-tools' }, minBtn, currencyToggle),
+            h('div', { class: 'amt-wrap' }, amountPrefix, amountInput), amountSubLabel)
         ),
-        h('div', { class: 'swap-field-inner' },
-          h('div', { class: 'amt-wrap' }, amountPrefix, amountInput),
-          fromSel
+        h('button', { class: 'pair-switch', type: 'button', onclick: () => { swapDirection(); syncAssetLabels(); }, title: 'Tukar arah', 'aria-label': 'Tukar arah swap' }, '→'),
+        h('section', { class: 'asset-panel' },
+          h('div', { class: 'asset-panel-main' }, toAssetIcon,
+            h('div', { class: 'asset-meta' }, h('span', {}, 'Anda terima'), toAssetCode, toAssetNetwork), toSel),
+          h('div', { class: 'asset-amount-row receive' }, estOutput, estSubLabel)
+        )
+      ),
+      h('div', { class: 'swap-details' },
+        h('div', { class: 'field-group address-field' },
+          h('label', {}, 'Address penerima'),
+          h('div', { class: 'address-control' }, settleAddrInput, state.me?.isAdmin ? selectAddressButton : null),
+          settleAddrLabel
         ),
-        amountSubLabel
+        h('details', { class: 'advanced-fields' }, h('summary', {}, 'Opsi lanjutan'),
+          h('div', { class: 'advanced-grid' },
+            h('div', { class: 'field-group' }, h('label', {}, 'Refund address'), refundAddrInput),
+            h('div', { class: 'field-group' }, h('label', {}, 'Destination memo'), memoInput)
+          )
+        )
       ),
-      h('div', { class: 'swap-arrow-wrap' },
-        h('div', { class: 'swap-arrow', onclick: swapDirection, title: 'Swap direction' }, '↓')
-      ),
-      h('div', { class: 'swap-field' },
-        h('label', {}, 'You receive (estimated)'),
-        h('div', { class: 'swap-field-inner' }, estOutput, toSel),
-        estSubLabel
-      ),
-      rateBox,
-      h('div', { class: 'field-group' },
-        h('label', {}, 'Destination address'),
-        h('div', { class: 'address-control' }, settleAddrInput, state.me?.isAdmin ? selectAddressButton : null),
-        settleAddrLabel
-      ),
-      h('div', { class: 'field-group' },
-        h('label', {}, 'Refund address'),
-        refundAddrInput
-      ),
-      h('div', { class: 'field-group' },
-        h('label', {}, 'Destination memo'),
-        memoInput
-      ),
-      h('div', { class: 'actions' },
-        h('button', { onclick: createShift }, 'Kirim swap')
-      )
+      h('button', { class: 'shift-submit', onclick: createShift }, 'Kirim swap')
     ),
     result
   );

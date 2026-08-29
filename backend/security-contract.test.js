@@ -95,5 +95,7 @@ assert.match(frontend, /Komisi dan afiliasi/);
 assert.match(frontend, /state\.view = l\.id/);
 assert.match(frontend, /Pilih address/);
 assert.match(frontend, /Kirim swap/);
+assert.match(frontend, /swap-steps/);
+assert.match(frontend, /asset-pair/);
 assert.doesNotMatch(frontend, /unlocked for 30 minutes/);
 console.log('security contract: ok');
