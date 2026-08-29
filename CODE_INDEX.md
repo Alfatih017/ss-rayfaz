@@ -23,6 +23,7 @@
 - `frontend/app.js` — vanilla DOM SPA with separate pages for Swap, Pool wallet, Wallet, Riwayat, Token, and Pengaturan. `state.view` controls the active page.
 - The Swap destination field has an adjacent `Pilih address` action for selecting the next rotation wallet without committing rotation; `Kirim swap` creates the shift and successful persistence commits the selected rotation.
 - Swap presentation follows a focused three-step flow: rate mode, side-by-side asset pair cards, receiving address, collapsed advanced refund/memo fields, then the submit action. Branding and asset visuals remain original Rayfaz CSS rather than copied third-party assets.
+- Asset cards and amount controls are intentionally compact: MIN/COIN/USD use 26–28px segmented controls, the pair switch is 34px, and the primary submit remains 44px for a safe touch target.
 - `frontend/style.css` — compact Kumo-inspired tokens, responsive page layouts, internal table scrolling, focus-visible states, and reduced-motion support.
 - Desktop Swap fits a 1440×900 viewport in browser verification. Mobile pages do not overflow horizontally; long forms may scroll vertically to preserve usable touch targets.
 
