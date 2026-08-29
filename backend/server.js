@@ -241,8 +241,13 @@ function buildMonetizationFields() {
   const validRate = Number.isFinite(commissionRate) && commissionRate >= 0 && commissionRate <= 2 ? commissionRate : null;
   return {
     ...(affiliateId ? { affiliateId } : {}),
-    ...(validRate !== null ? { commissionRate: validRate } : {})
+    configuredCommissionRate: validRate
   };
+}
+
+function buildSideShiftAffiliateFields() {
+  const { affiliateId } = buildMonetizationFields();
+  return affiliateId ? { affiliateId } : {};
 }
 
 function requireAffiliateId(req, res, next) {
@@ -255,7 +260,7 @@ function requireAffiliateId(req, res, next) {
 app.get('/api/settings/monetization', requireAdmin, (req, res) => {
   res.set('Cache-Control', 'no-store');
   const fields = buildMonetizationFields();
-  res.json({ affiliateId: fields.affiliateId || '', commissionRate: fields.commissionRate ?? '' });
+  res.json({ affiliateId: fields.affiliateId || '', commissionRate: fields.configuredCommissionRate ?? '', commissionRateSent: false });
 });
 
 app.put('/api/settings/monetization', requireAdmin, (req, res) => {
@@ -388,7 +393,7 @@ app.post('/api/quote', requireAuth, requireAffiliateId, async (req, res) => {
       depositCoin, depositNetwork, settleCoin, settleNetwork,
       depositAmount: depositAmount || null,
       settleAmount: settleAmount || null,
-      ...buildMonetizationFields()
+      ...buildSideShiftAffiliateFields()
     }, clientIp(req));
     res.json(data);
   } catch (e) { res.status(e.status || 500).json({ error: e.message, body: e.body }); }
@@ -434,7 +439,7 @@ app.post('/api/shifts/fixed', requireAuth, requireAffiliateId, async (req, res) 
   try {
     const data = await ss.fixed({
       quoteId, settleAddress, refundAddress, settleMemo, refundMemo,
-      ...buildMonetizationFields()
+      ...buildSideShiftAffiliateFields()
     }, clientIp(req));
     persistShift(req.session.userId, data);
     commitRotationForAddress(settleAddress);
@@ -449,7 +454,7 @@ app.post('/api/shifts/variable', requireAuth, requireAffiliateId, async (req, re
     const data = await ss.variable({
       depositCoin, depositNetwork, settleCoin, settleNetwork,
       settleAddress, refundAddress, settleMemo, refundMemo,
-      ...buildMonetizationFields()
+      ...buildSideShiftAffiliateFields()
     }, clientIp(req));
     persistShift(req.session.userId, data);
     commitRotationForAddress(settleAddress);

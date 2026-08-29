@@ -1158,9 +1158,9 @@ function accountView() {
       state.me.isAdmin ? walletStatus : null
       ,state.me.isAdmin ? h('div',{class:'divider'}) : null,
       state.me.isAdmin ? h('h2',{},'Komisi dan afiliasi') : null,
-      state.me.isAdmin ? h('div',{class:'muted',style:'margin-bottom:14px'},'Affiliate ID wajib untuk membuat swap (Account ID SideShift). Commission rate opsional; kosong memakai default SideShift. Rate valid 0% sampai 2%.') : null,
+      state.me.isAdmin ? h('div',{class:'muted',style:'margin-bottom:14px'},'Affiliate ID wajib untuk membuat swap (Account ID SideShift). Commission rate disimpan sebagai catatan, tetapi tidak dikirim karena endpoint SideShift saat ini menolak parameter tersebut; atur rate efektif di dashboard SideShift.') : null,
       state.me.isAdmin ? h('div',{class:'settings-grid'},h('div',{},h('label',{},'Affiliate ID'),affiliateId),h('div',{},h('label',{},'Commission rate (%)'),commissionRate)) : null,
-      state.me.isAdmin ? h('button',{onclick:async()=>{try{await api.put('/api/settings/monetization',{affiliateId:affiliateId.value,commissionRate:commissionRate.value});toast('Pengaturan komisi tersimpan','success');}catch(e){toast(e.message,'error');}}},'Simpan pengaturan') : null
+      state.me.isAdmin ? h('button',{onclick:async()=>{try{await api.put('/api/settings/monetization',{affiliateId:affiliateId.value,commissionRate:commissionRate.value});toast('Affiliate ID tersimpan; rate dikelola di dashboard SideShift','success');}catch(e){toast(e.message,'error');}}},'Simpan pengaturan') : null
     )
   );
 }
