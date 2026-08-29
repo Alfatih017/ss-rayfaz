@@ -9,54 +9,34 @@
  *
  * SECURITY CONTRACT:
  * - Decrypted keys NEVER touch disk, logs, or responses.
- * - TTL is 30 minutes from creation; extendable on activity.
- * - Lock() / logout() immediately clears all entries.
+ * - SESSION_SCOPED: unlock lasts for the current login session only.
+ * - Lock(), logout, password change, or process restart clears all entries.
  * - Only one concurrent unlock per user session is allowed.
  */
 
-const crypto = require('crypto');
 const db = require('./db');
 const wallet = require('./wallet');
 
-const TTL_MS = 30 * 60 * 1000; // 30 minutes
+const SESSION_SCOPED = true;
 
 /**
- * Map<sessionId, { userId, keys: Map<walletId, Buffer>, createdAt, expiresAt }>
+ * Map<sessionId, { userId, keys: Map<walletId, Buffer>, createdAt }>
  */
 const sessions = new Map();
 
-function _purge() {
-  const now = Date.now();
-  for (const [sid, entry] of sessions) {
-    if (entry.expiresAt <= now) sessions.delete(sid);
-  }
-}
-
 function isUnlocked(sessionId) {
-  const entry = sessions.get(sessionId);
-  if (!entry) return false;
-  if (entry.expiresAt <= Date.now()) {
-    sessions.delete(sessionId);
-    return false;
-  }
-  return true;
+  return sessions.has(sessionId);
 }
 
 function getKey(sessionId, walletId) {
   const entry = sessions.get(sessionId);
-  if (!entry || entry.expiresAt <= Date.now()) {
-    sessions.delete(sessionId);
-    return null;
-  }
+  if (!entry) return null;
   return entry.keys.get(walletId) || null;
 }
 
 function getAllKeys(sessionId) {
   const entry = sessions.get(sessionId);
-  if (!entry || entry.expiresAt <= Date.now()) {
-    sessions.delete(sessionId);
-    return null;
-  }
+  if (!entry) return null;
   return entry.keys;
 }
 
@@ -79,19 +59,18 @@ function unlock(sessionId, userId, password) {
       const secret = wallet.decryptSecret(row.secret_key_enc, row.iv, row.auth_tag);
       keys.set(row.id, secret);
     } catch {
-      // skip wallets that fail to decrypt
+      for (const secret of keys.values()) secret.fill(0);
+      return false;
     }
   }
 
   // Log the unlock action
   db.prepare('INSERT INTO secret_access_log (user_id, wallet_id, action) VALUES (?, NULL, ?)').run(userId, 'session_unlock');
 
-  const now = Date.now();
   sessions.set(sessionId, {
     userId,
     keys,
-    createdAt: now,
-    expiresAt: now + TTL_MS,
+    createdAt: Date.now(),
   });
   return true;
 }
@@ -105,23 +84,17 @@ function lock(sessionId) {
   sessions.delete(sessionId);
 }
 
-function extend(sessionId) {
-  const entry = sessions.get(sessionId);
-  if (!entry || entry.expiresAt <= Date.now()) {
-    sessions.delete(sessionId);
-    return false;
-  }
-  entry.expiresAt = Date.now() + TTL_MS;
-  return true;
-}
-
 function lockAllForUser(userId) {
   for (const [sid, entry] of sessions) {
     if (entry.userId === userId) sessions.delete(sid);
   }
 }
 
-// Purge expired entries every 5 minutes
-setInterval(_purge, 5 * 60 * 1000).unref();
+function addKey(sessionId, walletId, secret) {
+  const entry = sessions.get(sessionId);
+  if (!entry) return false;
+  entry.keys.set(walletId, Buffer.from(secret));
+  return true;
+}
 
-module.exports = { isUnlocked, getKey, getAllKeys, unlock, lock, extend, lockAllForUser, TTL_MS };
+module.exports = { isUnlocked, getKey, getAllKeys, unlock, lock, lockAllForUser, addKey, SESSION_SCOPED };

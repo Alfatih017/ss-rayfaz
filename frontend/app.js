@@ -81,12 +81,12 @@ function brandMark() {
 function nav() {
   const links = [
     { id: 'swap', label: 'Swap' },
-    { id: 'bulk', label: 'Bulk' },
-    { id: 'wallets', label: 'Wallets' },
-    { id: 'history', label: 'History' }
+    { id: 'bulk', label: 'Pool wallet' },
+    { id: 'wallets', label: 'Wallet' },
+    { id: 'history', label: 'Riwayat' },
+    { id: 'settings', label: 'Pengaturan' }
   ];
-  if (state.me?.isAdmin) links.push({ id: 'admin', label: 'Tokens' });
-  links.push({ id: 'account', label: 'Account' });
+  if (state.me?.isAdmin) links.splice(4, 0, { id: 'tokens', label: 'Token' });
 
   const unlockBadge = state.me?.isAdmin
     ? h('span', {
@@ -104,7 +104,7 @@ function nav() {
             try {
               await api.post('/api/wallets/session-unlock', { password });
               state.sessionUnlocked = true;
-              toast('Wallet session unlocked for 30 minutes', 'success');
+              toast('Wallet terbuka selama sesi login ini', 'success');
               render();
             } catch (e) { toast(e.message, 'error'); }
           }
@@ -114,10 +114,11 @@ function nav() {
 
   return h('div', { class: 'nav' },
     brandMark(),
-    h('div', { class: 'links' },
+    h('div', { class: 'links', 'aria-label': 'Navigasi halaman' },
       ...links.map(l => h('a', {
+        href: '#' + l.id,
         class: state.view === l.id ? 'active' : '',
-        onclick: () => { state.view = l.id; render(); }
+        onclick: (event) => { event.preventDefault(); state.view = l.id; render(); }
       }, l.label))
     ),
     unlockBadge,
@@ -236,15 +237,22 @@ function swapView() {
   const settleAddrInput = h('input', { type: 'text', placeholder: 'Destination address' });
   if (prefill?.settleAddress) settleAddrInput.value = prefill.settleAddress;
   const settleAddrLabel = h('div', { class: 'muted', style: 'font-size:11px; margin-top:4px;' }, '');
+  const selectAddressButton = h('button', { class: 'ghost address-select-button', type: 'button', onclick: loadRotationAddress }, 'Pilih address');
   async function loadRotationAddress() {
     if (!state.me?.isAdmin) return;
+    selectAddressButton.disabled = true;
+    selectAddressButton.textContent = 'Memilih…';
     try {
-      const r = await api.get('/api/wallets/rotation/next');
+      const r = await api.post('/api/wallets/rotation/next', {});
       settleAddrInput.value = r.publicKey;
       settleAddrInput.readOnly = true;
       settleAddrLabel.textContent = `🔄 Rotasi #${r.nextIndex + 1}/${r.poolSize} · ${r.label || 'Unlabeled'}`;
-    } catch {
+    } catch (e) {
       settleAddrLabel.textContent = '';
+      toast('Address wallet gagal dipilih: ' + e.message, 'error');
+    } finally {
+      selectAddressButton.disabled = false;
+      selectAddressButton.textContent = 'Pilih address';
     }
   }
   const refundAddrInput = h('input', { type: 'text', placeholder: 'Refund address (recommended)' });
@@ -409,6 +417,7 @@ function swapView() {
   }
 
   async function createShift() {
+    if (state.me?.isAdmin && !settleAddrInput.value.trim()) await loadRotationAddress();
     const settleAddress = settleAddrInput.value.trim();
     if (!settleAddress) return toast('Enter destination address', 'error');
     const [fc, fn] = from.split(':');
@@ -451,8 +460,6 @@ function swapView() {
 
   setCurrency('coin');
   Promise.all([loadFromUsdPrice(), loadToUsdPrice()]).then(refreshPair);
-  loadRotationAddress();
-
   return h('div', { class: 'container' },
     h('div', { class: 'card' },
       h('div', { class: 'eyebrow' }, 'Exchange'),
@@ -482,7 +489,7 @@ function swapView() {
       rateBox,
       h('div', { class: 'field-group' },
         h('label', {}, 'Destination address'),
-        settleAddrInput,
+        h('div', { class: 'address-control' }, settleAddrInput, state.me?.isAdmin ? selectAddressButton : null),
         settleAddrLabel
       ),
       h('div', { class: 'field-group' },
@@ -494,8 +501,7 @@ function swapView() {
         memoInput
       ),
       h('div', { class: 'actions' },
-        h('button', { onclick: createShift },
-          mode === 'fixed' ? 'Lock Rate & Continue' : 'Generate Address')
+        h('button', { onclick: createShift }, 'Kirim swap')
       )
     ),
     result
@@ -856,11 +862,10 @@ async function bulkView() {
               const list = await api.get('/api/wallets');
               if (!list.length) return toast('No wallets to export', 'error');
               if (!confirm(`Export ${list.length} wallets WITH private keys to CSV?\n\nThe file will contain plaintext secrets — store it safely.`)) return;
-              const password = prompt('Enter your account password to export private keys:');
-              if (!password) return;
+              if (!state.sessionUnlocked) return toast('Buka wallet sekali untuk sesi login ini', 'error');
               const rows = [];
               for (const w of list) {
-                const r = await api.post('/api/wallets/' + w.id + '/reveal', { password });
+                const r = await api.post('/api/wallets/' + w.id + '/reveal', {});
                 rows.push([w.label || '', w.network, w.public_key, r.secret_key_base58]);
               }
               const csv = 'label,network,public_key,secret_key_base58\n' +
@@ -975,9 +980,8 @@ async function bulkView() {
             ' ',
             h('button', { class: 'ghost', style: 'padding: 7px 12px; font-size: 11px;', onclick: async () => {
               try {
-                const password = prompt('Enter your account password to reveal this private key:');
-                if (!password) return;
-                const r = await api.post('/api/wallets/' + w.id + '/reveal', { password });
+                if (!state.sessionUnlocked) return toast('Buka wallet sekali untuk sesi login ini', 'error');
+                const r = await api.post('/api/wallets/' + w.id + '/reveal', {});
                 showSecretModal(r);
               } catch (e) { toast(e.message, 'error'); }
             }}, 'Reveal'),
@@ -1082,33 +1086,41 @@ function showSecretModal(r) {
 }
 
 async function walletsView() {
-  const wrap=h('div',{class:'container wide'},h('div',{class:'card'},h('div',{class:'eyebrow'},'Treasury'),h('h1',{},'Wallets'),h('div',{class:'muted',style:'margin:6px 0 22px'},'View SOL balances and transfer from any stored wallet on Solana mainnet-beta.'),h('div',{id:'wallet-balances'},h('div',{class:'muted'},'Loading…'))));
+  const wrap=h('section',{class:'dashboard-section',id:'wallets'},h('div',{class:'card'},h('div',{class:'section-heading'},h('div',{},h('div',{class:'eyebrow'},'Treasury'),h('h1',{},'Wallet yang memiliki saldo'),h('div',{class:'muted'},'Saldo SOL nyata dari Solana mainnet-beta. Wallet kosong tidak memenuhi daftar ini.')),h('button',{class:'ghost',onclick:()=>render()},'Muat ulang')),h('div',{id:'wallet-balances'},h('div',{class:'state-box'},'Memuat saldo wallet…'))));
   const target=wrap.querySelector('#wallet-balances');
   try {
     const rows=await api.get('/api/wallets/balances');target.innerHTML='';
-    if(!rows.length){target.appendChild(h('div',{class:'muted'},'No wallets configured.'));return wrap;}
-    target.appendChild(h('div',{class:'wallet-grid'},...rows.map(w=>{
+    const positiveBalanceWallets=rows.filter(w=>w.balanceLamports!==null&&BigInt(w.balanceLamports)>0n);
+    const unavailable=rows.filter(w=>w.balanceLamports===null).length;
+    const totalLamports=positiveBalanceWallets.reduce((sum,w)=>sum+BigInt(w.balanceLamports),0n);
+    target.appendChild(h('div',{class:'metric-grid'},h('div',{class:'metric metric-violet'},h('span',{},'Total saldo'),h('strong',{},`${(Number(totalLamports)/1e9).toFixed(6)} SOL`)),h('div',{class:'metric metric-cyan'},h('span',{},'Wallet bersaldo'),h('strong',{},positiveBalanceWallets.length)),h('div',{class:'metric metric-amber'},h('span',{},'Total wallet'),h('strong',{},rows.length))));
+    if(unavailable)target.appendChild(h('div',{class:'notice warning'},`${unavailable} wallet gagal dibaca dari RPC dan tidak dianggap kosong.`));
+    if(!positiveBalanceWallets.length){target.appendChild(h('div',{class:'state-box'},rows.length?'Belum ada wallet dengan saldo SOL.':'Belum ada wallet. Buat wallet dari bagian pool wallet.'));return wrap;}
+    target.appendChild(h('div',{class:'wallet-grid'},...positiveBalanceWallets.map(w=>{
       const destination=h('input',{class:'mono',placeholder:'Destination Solana address'});const amount=h('input',{type:'number',min:'0.000000001',step:'0.000000001',placeholder:'SOL amount'});
-      const send=h('button',{onclick:async()=>{const password=prompt('Enter account password to create a signed preview:');if(!password)return;send.disabled=true;try{const p=await api.post('/api/wallets/transfer/preview',{sourceWalletId:w.id,destination:destination.value.trim(),amountSol:amount.value,password});showTransferPreview(p);}catch(e){toast(e.message,'error');}finally{send.disabled=false;}}},'Preview Transfer');
-      return h('div',{class:`wallet-card${w.is_main?' main-wallet':''}`},h('div',{class:'wallet-card-head'},h('div',{},h('div',{class:'eyebrow'},w.is_main?'Wallet Utama':'Wallet Tujuan Swap'),h('h2',{},w.label||'Unlabeled wallet')),w.is_main?h('span',{class:'status settled'},'MAIN'):null),h('div',{class:'value mono'},w.public_key),h('div',{class:'wallet-balance'},w.balanceSol===null?'Balance unavailable':`${w.balanceSol.toFixed(9)} SOL`),h('div',{class:'wallet-transfer-row'},destination,amount,send));
+      const send=h('button',{onclick:async()=>{if(!state.sessionUnlocked)return toast('Buka wallet sekali untuk sesi login ini','error');send.disabled=true;try{const p=await api.post('/api/wallets/transfer/preview',{sourceWalletId:w.id,destination:destination.value.trim(),amountSol:amount.value});showTransferPreview(p);}catch(e){toast(e.message,'error');}finally{send.disabled=false;}}},'Pratinjau transfer');
+      return h('article',{class:`wallet-card${w.is_main?' main-wallet':''}`},h('div',{class:'wallet-card-head'},h('div',{},h('div',{class:'eyebrow'},w.is_main?'Wallet utama':'Wallet rotasi'),h('h2',{},w.label||'Wallet tanpa label')),w.is_main?h('span',{class:'status settled'},'Utama'):null),h('div',{class:'value mono'},w.public_key),h('div',{class:'wallet-balance'},`${w.balanceSol.toFixed(9)} SOL`),h('div',{class:'wallet-transfer-row'},destination,amount,send));
     })));
   } catch(e){target.innerHTML='';target.appendChild(h('div',{class:'muted'},'Unable to load wallet balances: '+e.message));}
   return wrap;
 }
 
 function showTransferPreview(p){
-  const overlay=h('div',{class:'modal-overlay',onclick:e=>{if(e.target===overlay)overlay.remove();}});const box=h('div',{class:'modal-box'},h('div',{class:'eyebrow'},'Mainnet Transfer Preview'),h('h1',{style:'font-size:22px'},`${p.amountSol} SOL`),h('div',{class:'summary-row'},h('span',{class:'k'},'From'),h('span',{class:'v mono'},p.sourceAddress)),h('div',{class:'summary-row'},h('span',{class:'k'},'To'),h('span',{class:'v mono'},p.destination)),h('div',{class:'summary-row'},h('span',{class:'k'},'Estimated fee'),h('span',{class:'v'},`${p.feeSol} SOL`)),h('div',{class:'summary-row'},h('span',{class:'k'},'Remaining balance'),h('span',{class:'v'},`${p.balanceAfterSol} SOL`)),h('div',{class:'muted',style:'margin-top:12px'},`Expires ${new Date(p.expiresAt).toLocaleTimeString()}. Confirmation broadcasts real funds and cannot be undone.`),h('div',{class:'actions'},h('button',{class:'danger',onclick:async()=>{if(!confirm('Broadcast this irreversible SOL transfer on mainnet?'))return;const password=prompt('Re-enter account password to broadcast:');if(!password)return;try{const r=await api.post('/api/wallets/transfer/confirm',{previewToken:p.previewToken,password});toast('Transfer confirmed: '+r.signature.slice(0,12)+'…','success');overlay.remove();state.view='wallets';render();}catch(e){toast(e.message,'error');}}},'Confirm & Send'),h('button',{class:'ghost',onclick:()=>overlay.remove()},'Cancel')));overlay.appendChild(box);document.body.appendChild(overlay);
+  const overlay=h('div',{class:'modal-overlay',onclick:e=>{if(e.target===overlay)overlay.remove();}});const box=h('div',{class:'modal-box'},h('div',{class:'eyebrow'},'Pratinjau transfer mainnet'),h('h1',{style:'font-size:22px'},`${p.amountSol} SOL`),h('div',{class:'summary-row'},h('span',{class:'k'},'Dari'),h('span',{class:'v mono'},p.sourceAddress)),h('div',{class:'summary-row'},h('span',{class:'k'},'Ke'),h('span',{class:'v mono'},p.destination)),h('div',{class:'summary-row'},h('span',{class:'k'},'Estimasi biaya'),h('span',{class:'v'},`${p.feeSol} SOL`)),h('div',{class:'summary-row'},h('span',{class:'k'},'Sisa saldo'),h('span',{class:'v'},`${p.balanceAfterSol} SOL`)),h('div',{class:'muted',style:'margin-top:12px'},`Kedaluwarsa ${new Date(p.expiresAt).toLocaleTimeString()}. Pengiriman tidak dapat dibatalkan.`),h('div',{class:'actions'},h('button',{class:'danger',onclick:async()=>{if(!confirm('Kirim transfer SOL mainnet ini?'))return;try{const r=await api.post('/api/wallets/transfer/confirm',{previewToken:p.previewToken});toast('Transfer terkirim: '+r.signature.slice(0,12)+'…','success');overlay.remove();render();}catch(e){toast(e.message,'error');}}},'Konfirmasi dan kirim'),h('button',{class:'ghost',onclick:()=>overlay.remove()},'Batal')));overlay.appendChild(box);document.body.appendChild(overlay);
 }
 
 function accountView() {
   const cur = h('input', { type: 'password', placeholder: 'Current password' });
   const nx = h('input', { type: 'password', placeholder: 'New password (min 12 chars)' });
   const mnemonic = h('textarea', { rows: 4, autocomplete: 'off', spellcheck: 'false', placeholder: 'Enter a valid 12 or 24 word seed phrase' });
-  const walletPassword = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'Account password' });
   const walletStatus = h('div', { class: 'muted', style: 'margin-top:12px' }, 'Checking wallet settings…');
   const refreshWalletStatus = async () => { try { const s = await api.get('/api/settings/wallet'); walletStatus.textContent = s.configured ? `Configured · ${s.public_key}` : 'No seed wallet configured.'; } catch (e) { walletStatus.textContent = 'Unable to load wallet settings.'; } };
   refreshWalletStatus();
-  return h('div', { class: 'container' },
+  const affiliateId=h('input',{placeholder:'Account ID SideShift (opsional)'});
+  const commissionRate=h('input',{type:'number',min:'0',max:'2',step:'0.1',placeholder:'Kosongkan atau isi 0–2'});
+  const loadMonetization=async()=>{try{const s=await api.get('/api/settings/monetization');affiliateId.value=s.affiliateId||'';commissionRate.value=s.commissionRate===''?'':s.commissionRate;}catch(e){toast('Pengaturan komisi gagal dimuat: '+e.message,'error');}};
+  if(state.me.isAdmin)loadMonetization();
+  return h('section', { class: 'dashboard-section', id:'settings' },
     h('div', { class: 'card' },
       h('div', { class: 'eyebrow' }, 'Profile'),
       h('h1', {}, 'Account'),
@@ -1128,12 +1140,16 @@ function accountView() {
       state.me.isAdmin ? h('h2', { style: 'margin-bottom:8px' }, 'Seed Wallet') : null,
       state.me.isAdmin ? h('div', { class: 'muted', style: 'margin-bottom:14px' }, 'The phrase and derived Solana private key are encrypted at rest. Derivation path: m/44′/501′/0′/0′.') : null,
       state.me.isAdmin ? h('div', { style: 'margin-bottom:12px' }, mnemonic) : null,
-      state.me.isAdmin ? h('div', { style: 'margin-bottom:14px' }, walletPassword) : null,
       state.me.isAdmin ? h('div', { class: 'actions compact-actions' },
-        h('button', { onclick: async () => { try { const r = await api.post('/api/settings/wallet', { mnemonic: mnemonic.value, password: walletPassword.value }); mnemonic.value=''; walletPassword.value=''; toast('Seed wallet saved securely', 'success'); await refreshWalletStatus(); } catch(e) { toast(e.message,'error'); } } }, 'Save Seed Wallet'),
-        h('button', { class: 'ghost', onclick: async () => { const password=prompt('Enter your account password to reveal the seed and private key:'); if(!password)return; try { showSecretModal(await api.post('/api/settings/wallet/reveal',{password})); } catch(e){ toast(e.message,'error'); } } }, 'Reveal Secrets')
+        h('button', { onclick: async () => { if(!state.sessionUnlocked)return toast('Buka wallet sekali untuk sesi login ini','error');try { const r = await api.post('/api/settings/wallet', { mnemonic: mnemonic.value }); mnemonic.value=''; toast('Seed wallet tersimpan aman', 'success'); await refreshWalletStatus(); } catch(e){ toast(e.message,'error'); } } }, 'Simpan seed wallet'),
+        h('button', { class: 'ghost', onclick: async () => { if(!state.sessionUnlocked)return toast('Buka wallet sekali untuk sesi login ini','error');try { showSecretModal(await api.post('/api/settings/wallet/reveal',{})); } catch(e){ toast(e.message,'error'); } } }, 'Tampilkan secret')
       ) : null,
       state.me.isAdmin ? walletStatus : null
+      ,state.me.isAdmin ? h('div',{class:'divider'}) : null,
+      state.me.isAdmin ? h('h2',{},'Komisi dan afiliasi') : null,
+      state.me.isAdmin ? h('div',{class:'muted',style:'margin-bottom:14px'},'Keduanya opsional. Kosong berarti field tidak dikirim ke SideShift. Rate valid 0% sampai 2%.') : null,
+      state.me.isAdmin ? h('div',{class:'settings-grid'},h('div',{},h('label',{},'Affiliate ID'),affiliateId),h('div',{},h('label',{},'Commission rate (%)'),commissionRate)) : null,
+      state.me.isAdmin ? h('button',{onclick:async()=>{try{await api.put('/api/settings/monetization',{affiliateId:affiliateId.value,commissionRate:commissionRate.value});toast('Pengaturan komisi tersimpan','success');}catch(e){toast(e.message,'error');}}},'Simpan pengaturan') : null
     )
   );
 }
@@ -1148,11 +1164,11 @@ async function render() {
   root.appendChild(nav());
   let view;
   if (state.view === 'swap') view = swapView();
-  else if (state.view === 'bulk') view = await bulkView();
-  else if (state.view === 'wallets') view = await walletsView();
+  else if (state.view === 'bulk' && state.me.isAdmin) view = await bulkView();
+  else if (state.view === 'wallets' && state.me.isAdmin) view = await walletsView();
   else if (state.view === 'history') view = await historyView();
-  else if (state.view === 'admin' && state.me.isAdmin) view = await adminView();
-  else if (state.view === 'account') view = accountView();
+  else if (state.view === 'tokens' && state.me.isAdmin) view = await adminView();
+  else if (state.view === 'settings') view = accountView();
   else view = swapView();
   root.appendChild(view);
 }

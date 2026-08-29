@@ -66,6 +66,11 @@ function verifyAdminPassword(userId, password) {
   return !!user?.is_admin && typeof password === 'string' && bcrypt.compareSync(password, user.password_hash);
 }
 
+function requireWalletUnlock(req, res, next) {
+  if (!walletSession.isUnlocked(req.session.id)) return res.status(403).json({ error: 'wallet session not unlocked' });
+  next();
+}
+
 const walletSession = require('./wallet-session');
 
 // --- Wallet session unlock (for automated sweep) ---
@@ -73,7 +78,7 @@ app.post('/api/wallets/session-unlock', requireAdmin, (req, res) => {
   const ok = walletSession.unlock(req.session.id, req.session.userId, req.body?.password);
   if (!ok) return res.status(401).json({ error: 'password verification failed' });
   res.set('Cache-Control', 'no-store');
-  res.json({ ok: true, ttlSeconds: Math.floor(walletSession.TTL_MS / 1000) });
+  res.json({ ok: true, scope: 'login-session' });
 });
 
 app.post('/api/wallets/session-lock', requireAdmin, (req, res) => {
@@ -87,7 +92,7 @@ app.get('/api/wallets/session-status', requireAdmin, (req, res) => {
 });
 
 // --- Wallet rotation: round-robin pool selection ---
-app.get('/api/wallets/rotation/next', requireAdmin, (req, res) => {
+app.post('/api/wallets/rotation/next', requireAdmin, requireWalletUnlock, (req, res) => {
   const pool = db.prepare(
     'SELECT id, label, public_key FROM wallets WHERE rotation_enabled = 1 ORDER BY id'
   ).all();
@@ -100,10 +105,6 @@ app.get('/api/wallets/rotation/next', requireAdmin, (req, res) => {
     nextIndex = lastPos >= 0 ? (lastPos + 1) % pool.length : 0;
   }
   const next = pool[nextIndex];
-  db.prepare(
-    'UPDATE wallet_rotation_state SET last_wallet_id = ?, last_wallet_public_key = ?, last_rotation_at = datetime(\'now\'), updated_at = datetime(\'now\') WHERE id = 1'
-  ).run(next.id, next.public_key);
-
   res.set('Cache-Control', 'no-store');
   res.json({
     walletId: next.id,
@@ -222,7 +223,49 @@ app.post('/api/auth/change-password', requireAuth, (req, res) => {
     return res.status(401).json({ error: 'current password wrong' });
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?')
     .run(bcrypt.hashSync(nextPw, 12), user.id);
+  walletSession.lockAllForUser(user.id);
   req.session.regenerate((error) => error ? res.status(500).json({ error: 'session reset failed' }) : res.json({ ok: true, loginRequired: true }));
+});
+
+function getSetting(key) {
+  return db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key);
+}
+
+function buildMonetizationFields() {
+  const affiliateSetting = getSetting('affiliate_id');
+  const rateSetting = getSetting('commission_rate');
+  const affiliateId = String(affiliateSetting ? affiliateSetting.value || '' : process.env.AFFILIATE_ID || '').trim() || null;
+  const rawRate = rateSetting ? rateSetting.value : null;
+  const envRate = process.env.COMMISSION_RATE;
+  const commissionRate = rateSetting ? (rawRate === null ? null : Number(rawRate)) : envRate ? Number(envRate) : null;
+  const validRate = Number.isFinite(commissionRate) && commissionRate >= 0 && commissionRate <= 2 ? commissionRate : null;
+  return {
+    ...(affiliateId ? { affiliateId } : {}),
+    ...(validRate !== null ? { commissionRate: validRate } : {})
+  };
+}
+
+app.get('/api/settings/monetization', requireAdmin, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const fields = buildMonetizationFields();
+  res.json({ affiliateId: fields.affiliateId || '', commissionRate: fields.commissionRate ?? '' });
+});
+
+app.put('/api/settings/monetization', requireAdmin, (req, res) => {
+  const affiliateId = String(req.body?.affiliateId ?? '').trim();
+  const rateText = String(req.body?.commissionRate ?? '').trim();
+  const commissionRate = rateText === '' ? null : Number(rateText);
+  if (affiliateId.length > 128 || (commissionRate !== null && (!Number.isFinite(commissionRate) || commissionRate < 0 || commissionRate > 2))) {
+    return res.status(400).json({ error: 'commission rate must be empty or between 0 and 2' });
+  }
+  const save = db.prepare(`INSERT INTO app_settings(key,value,updated_at) VALUES(?,?,datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=datetime('now')`);
+  const tx = db.transaction(() => {
+    save.run('affiliate_id', affiliateId || null);
+    save.run('commission_rate', commissionRate === null ? null : String(commissionRate));
+  });
+  tx();
+  res.json({ ok: true, affiliateId, commissionRate: commissionRate ?? '' });
 });
 
 app.get('/api/tokens', requireAuth, (req, res) => {
@@ -338,8 +381,7 @@ app.post('/api/quote', requireAuth, async (req, res) => {
       depositCoin, depositNetwork, settleCoin, settleNetwork,
       depositAmount: depositAmount || null,
       settleAmount: settleAmount || null,
-      affiliateId: process.env.AFFILIATE_ID,
-      commissionRate: Number(process.env.COMMISSION_RATE || 0.5)
+      ...buildMonetizationFields()
     }, clientIp(req));
     res.json(data);
   } catch (e) { res.status(e.status || 500).json({ error: e.message, body: e.body }); }
@@ -372,16 +414,23 @@ function persistShift(userId, data) {
   );
 }
 
+function commitRotationForAddress(settleAddress) {
+  const selected = db.prepare('SELECT id, public_key FROM wallets WHERE rotation_enabled = 1 AND public_key = ?').get(settleAddress);
+  if (!selected) return;
+  db.prepare('UPDATE wallet_rotation_state SET last_wallet_id = ?, last_wallet_public_key = ?, last_rotation_at = datetime(\'now\'), updated_at = datetime(\'now\') WHERE id = 1')
+    .run(selected.id, selected.public_key);
+}
+
 app.post('/api/shifts/fixed', requireAuth, async (req, res) => {
   const { quoteId, settleAddress, refundAddress, settleMemo, refundMemo } = req.body || {};
   if (!quoteId || !settleAddress) return res.status(400).json({ error: 'quoteId and settleAddress required' });
   try {
     const data = await ss.fixed({
       quoteId, settleAddress, refundAddress, settleMemo, refundMemo,
-      affiliateId: process.env.AFFILIATE_ID,
-      commissionRate: Number(process.env.COMMISSION_RATE || 0.5)
+      ...buildMonetizationFields()
     }, clientIp(req));
     persistShift(req.session.userId, data);
+    commitRotationForAddress(settleAddress);
     res.json(data);
   } catch (e) { res.status(e.status || 500).json({ error: e.message, body: e.body }); }
 });
@@ -393,10 +442,10 @@ app.post('/api/shifts/variable', requireAuth, async (req, res) => {
     const data = await ss.variable({
       depositCoin, depositNetwork, settleCoin, settleNetwork,
       settleAddress, refundAddress, settleMemo, refundMemo,
-      affiliateId: process.env.AFFILIATE_ID,
-      commissionRate: Number(process.env.COMMISSION_RATE || 0.5)
+      ...buildMonetizationFields()
     }, clientIp(req));
     persistShift(req.session.userId, data);
+    commitRotationForAddress(settleAddress);
     res.json(data);
   } catch (e) { res.status(e.status || 500).json({ error: e.message, body: e.body }); }
 });
@@ -445,21 +494,20 @@ app.get('/api/wallets', requireAdmin, (req, res) => {
 
 app.get('/api/wallets/balances', requireAdmin, async (req, res) => {
   const rows=db.prepare('SELECT w.id,w.label,w.network,w.public_key,w.created_at,(ws.wallet_id IS NOT NULL) AS is_main FROM wallets w LEFT JOIN wallet_settings ws ON ws.wallet_id=w.id ORDER BY is_main DESC,w.created_at DESC').all();
+  res.set('Cache-Control', 'no-store');
   res.json(await solanaTransfer.balances(rows));
 });
 
-app.post('/api/wallets/transfer/preview', requireAdmin, async (req, res) => {
-  if(!verifyAdminPassword(req.session.userId,req.body?.password))return res.status(401).json({error:'password verification failed'});
+app.post('/api/wallets/transfer/preview', requireAdmin, requireWalletUnlock, async (req, res) => {
   const source=db.prepare('SELECT * FROM wallets WHERE id=?').get(Number(req.body?.sourceWalletId));if(!source)return res.status(404).json({error:'source wallet not found'});
   try{const secret=wallet.decryptSecret(source.secret_key_enc,source.iv,source.auth_tag);res.set('Cache-Control','no-store');res.json(await solanaTransfer.preview({secretKey:secret,sourceId:source.id,sourceLabel:source.label,destination:req.body?.destination,amountSol:req.body?.amountSol,owner:req.session.userId}));}catch(e){res.status(e.status||502).json({error:e.message});}
 });
 
-app.post('/api/wallets/transfer/confirm', requireAdmin, async (req, res) => {
-  if(!verifyAdminPassword(req.session.userId,req.body?.password))return res.status(401).json({error:'password verification failed'});
+app.post('/api/wallets/transfer/confirm', requireAdmin, requireWalletUnlock, async (req, res) => {
   try{const result=await solanaTransfer.confirm(req.body?.previewToken,req.session.userId);db.prepare('INSERT INTO sol_transfer_log(source_wallet_id,destination,amount_lamports,fee_lamports,signature) VALUES(?,?,?,?,?)').run(result.sourceId,result.destination,result.amountLamports,result.feeLamports,result.signature);res.set('Cache-Control','no-store');res.json(result);}catch(e){res.status(e.status||502).json({error:e.message});}
 });
 
-app.post('/api/wallets/generate', requireAdmin, (req, res) => {
+app.post('/api/wallets/generate', requireAdmin, requireWalletUnlock, (req, res) => {
   const { count = 1, label_prefix = 'wallet', network = 'solana' } = req.body || {};
   const n = Math.min(Math.max(Number(count) || 1, 1), 100);
   if (network !== 'solana') return res.status(400).json({ error: 'only solana supported now' });
@@ -475,6 +523,7 @@ app.post('/api/wallets/generate', requireAdmin, (req, res) => {
       const { enc, iv, tag } = wallet.encryptSecret(kp.secretKey);
       const lbl = n === 1 && req.body.label ? req.body.label : `${label_prefix}-${Date.now()}-${i + 1}`;
       const info = insert.run(lbl, network, kp.publicKey, enc, iv, tag);
+      walletSession.addKey(req.session.id, info.lastInsertRowid, kp.secretKey);
       created.push({ id: info.lastInsertRowid, label: lbl, network, public_key: kp.publicKey });
     }
   });
@@ -482,8 +531,7 @@ app.post('/api/wallets/generate', requireAdmin, (req, res) => {
   res.json({ created });
 });
 
-app.post('/api/wallets/:id/reveal', requireAdmin, (req, res) => {
-  if (!verifyAdminPassword(req.session.userId, req.body?.password)) return res.status(401).json({ error: 'password verification failed' });
+app.post('/api/wallets/:id/reveal', requireAdmin, requireWalletUnlock, (req, res) => {
   const row = db.prepare('SELECT * FROM wallets WHERE id = ?').get(Number(req.params.id));
   if (!row) return res.status(404).json({ error: 'not found' });
   try {
@@ -509,8 +557,7 @@ app.get('/api/settings/wallet', requireAdmin, (req, res) => {
   res.json(row ? { configured: true, ...row } : { configured: false });
 });
 
-app.post('/api/settings/wallet', requireAdmin, (req, res) => {
-  if (!verifyAdminPassword(req.session.userId, req.body?.password)) return res.status(401).json({ error: 'password verification failed' });
+app.post('/api/settings/wallet', requireAdmin, requireWalletUnlock, (req, res) => {
   let derived; try { derived = wallet.deriveSolanaKeypair(req.body?.mnemonic); } catch { return res.status(400).json({ error: 'invalid 12 or 24 word mnemonic' }); }
   const secret = wallet.encryptSecret(derived.secretKey); const phrase = wallet.encryptSecret(Buffer.from(derived.mnemonic));
   const save = db.transaction(() => {
@@ -519,11 +566,10 @@ app.post('/api/settings/wallet', requireAdmin, (req, res) => {
     db.prepare('INSERT INTO wallet_settings(id,mnemonic_enc,mnemonic_iv,mnemonic_tag,wallet_id,updated_at) VALUES(1,?,?,?,?,datetime(\'now\')) ON CONFLICT(id) DO UPDATE SET mnemonic_enc=excluded.mnemonic_enc,mnemonic_iv=excluded.mnemonic_iv,mnemonic_tag=excluded.mnemonic_tag,wallet_id=excluded.wallet_id,updated_at=excluded.updated_at').run(phrase.enc,phrase.iv,phrase.tag,row.id);
     return row.id;
   });
-  const id = save(); res.json({ ok: true, walletId: id, publicKey: derived.publicKey });
+  const id = save(); walletSession.addKey(req.session.id, id, derived.secretKey); res.json({ ok: true, walletId: id, publicKey: derived.publicKey });
 });
 
-app.post('/api/settings/wallet/reveal', requireAdmin, (req, res) => {
-  if (!verifyAdminPassword(req.session.userId, req.body?.password)) return res.status(401).json({ error: 'password verification failed' });
+app.post('/api/settings/wallet/reveal', requireAdmin, requireWalletUnlock, (req, res) => {
   const row = db.prepare('SELECT ws.*,w.label,w.network,w.public_key,w.secret_key_enc,w.iv,w.auth_tag FROM wallet_settings ws JOIN wallets w ON w.id=ws.wallet_id WHERE ws.id=1').get();
   if (!row) return res.status(404).json({ error: 'seed wallet not configured' });
   res.set('Cache-Control', 'no-store');
@@ -532,13 +578,13 @@ app.post('/api/settings/wallet/reveal', requireAdmin, (req, res) => {
   res.json({ label:row.label,network:row.network,public_key:row.public_key,secret_key_base58:(require('bs58').default||require('bs58')).encode(secret),secret_key_array:Array.from(secret),mnemonic });
 });
 
-app.put('/api/wallets/:id', requireAdmin, (req, res) => {
+app.put('/api/wallets/:id', requireAdmin, requireWalletUnlock, (req, res) => {
   const { label } = req.body || {};
   db.prepare('UPDATE wallets SET label = ? WHERE id = ?').run(label || null, Number(req.params.id));
   res.json({ ok: true });
 });
 
-app.delete('/api/wallets/:id', requireAdmin, (req, res) => {
+app.delete('/api/wallets/:id', requireAdmin, requireWalletUnlock, (req, res) => {
   db.prepare('DELETE FROM wallets WHERE id = ?').run(Number(req.params.id));
   res.json({ ok: true });
 });

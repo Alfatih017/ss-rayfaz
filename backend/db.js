@@ -110,6 +110,12 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_secret_access_log_user ON secret_access_log(user_id);
   CREATE INDEX IF NOT EXISTS idx_secret_access_log_created ON secret_access_log(created_at);
+
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `)
 
 // --- Migrations for existing databases ---
