@@ -15,7 +15,8 @@
 ## SideShift monetization
 
 - `app_settings` in `backend/db.js` stores optional `affiliate_id` and `commission_rate` values.
-- `GET/PUT /api/settings/monetization` in `backend/server.js` reads/writes admin settings. Empty values are stored as `NULL` and omitted from SideShift payloads; commission rate accepts `0..2` percent.
+- `GET/PUT /api/settings/monetization` in `backend/server.js` reads/writes admin settings. Affiliate ID is required by SideShift before quote/shift creation; commission rate accepts empty (provider default) or `0..2` percent.
+- `requireAffiliateId` rejects quote/fixed/variable requests locally with a clear `409` response when neither a stored Account ID nor `AFFILIATE_ID` environment fallback exists.
 - `buildMonetizationFields()` applies database overrides and validates environment fallbacks before quote/fixed/variable requests.
 
 ## Frontend

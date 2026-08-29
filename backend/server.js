@@ -245,6 +245,13 @@ function buildMonetizationFields() {
   };
 }
 
+function requireAffiliateId(req, res, next) {
+  if (!buildMonetizationFields().affiliateId) {
+    return res.status(409).json({ error: 'Affiliate ID SideShift belum diatur. Isi Account ID di menu Pengaturan.' });
+  }
+  next();
+}
+
 app.get('/api/settings/monetization', requireAdmin, (req, res) => {
   res.set('Cache-Control', 'no-store');
   const fields = buildMonetizationFields();
@@ -374,7 +381,7 @@ app.get('/api/usd-price', requireAuth, async (req, res) => {
   } catch (e) { res.status(e.status || 500).json({ error: e.message, body: e.body }); }
 });
 
-app.post('/api/quote', requireAuth, async (req, res) => {
+app.post('/api/quote', requireAuth, requireAffiliateId, async (req, res) => {
   const { depositCoin, depositNetwork, settleCoin, settleNetwork, depositAmount, settleAmount } = req.body || {};
   try {
     const data = await ss.quote({
@@ -421,7 +428,7 @@ function commitRotationForAddress(settleAddress) {
     .run(selected.id, selected.public_key);
 }
 
-app.post('/api/shifts/fixed', requireAuth, async (req, res) => {
+app.post('/api/shifts/fixed', requireAuth, requireAffiliateId, async (req, res) => {
   const { quoteId, settleAddress, refundAddress, settleMemo, refundMemo } = req.body || {};
   if (!quoteId || !settleAddress) return res.status(400).json({ error: 'quoteId and settleAddress required' });
   try {
@@ -435,7 +442,7 @@ app.post('/api/shifts/fixed', requireAuth, async (req, res) => {
   } catch (e) { res.status(e.status || 500).json({ error: e.message, body: e.body }); }
 });
 
-app.post('/api/shifts/variable', requireAuth, async (req, res) => {
+app.post('/api/shifts/variable', requireAuth, requireAffiliateId, async (req, res) => {
   const { depositCoin, depositNetwork, settleCoin, settleNetwork, settleAddress, refundAddress, settleMemo, refundMemo } = req.body || {};
   if (!settleAddress) return res.status(400).json({ error: 'settleAddress required' });
   try {

@@ -87,6 +87,8 @@ assert.match(server, /commissionRate > 2/);
 assert.match(server, /buildMonetizationFields/);
 assert.match(server, /rateSetting \?/);
 assert.match(server, /validRate/);
+assert.match(server, /requireAffiliateId/);
+assert.match(server, /Affiliate ID SideShift belum diatur/);
 assert.match(server, /commitRotationForAddress\(settleAddress\)/);
 assert.match(db, /app_settings/);
 assert.match(frontend, /state\.view === 'swap'/);

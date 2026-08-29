@@ -417,14 +417,17 @@ function swapView() {
   }
 
   async function createShift() {
-    if (state.me?.isAdmin && !settleAddrInput.value.trim()) await loadRotationAddress();
-    const settleAddress = settleAddrInput.value.trim();
-    if (!settleAddress) return toast('Enter destination address', 'error');
-    const [fc, fn] = from.split(':');
-    const [tc, tn] = to.split(':');
-    const coinAmt = getCoinAmount();
-
     try {
+      if (state.me?.isAdmin) {
+        const monetization = await api.get('/api/settings/monetization');
+        if (!monetization.affiliateId) return toast('Isi Affiliate ID SideShift di menu Pengaturan sebelum swap', 'error');
+        if (!settleAddrInput.value.trim()) await loadRotationAddress();
+      }
+      const settleAddress = settleAddrInput.value.trim();
+      if (!settleAddress) return toast('Masukkan address penerima', 'error');
+      const [fc, fn] = from.split(':');
+      const [tc, tn] = to.split(':');
+      const coinAmt = getCoinAmount();
       let shift;
       if (mode === 'fixed') {
         if (!coinAmt) return toast('Amount required for fixed rate', 'error');
@@ -1155,7 +1158,7 @@ function accountView() {
       state.me.isAdmin ? walletStatus : null
       ,state.me.isAdmin ? h('div',{class:'divider'}) : null,
       state.me.isAdmin ? h('h2',{},'Komisi dan afiliasi') : null,
-      state.me.isAdmin ? h('div',{class:'muted',style:'margin-bottom:14px'},'Keduanya opsional. Kosong berarti field tidak dikirim ke SideShift. Rate valid 0% sampai 2%.') : null,
+      state.me.isAdmin ? h('div',{class:'muted',style:'margin-bottom:14px'},'Affiliate ID wajib untuk membuat swap (Account ID SideShift). Commission rate opsional; kosong memakai default SideShift. Rate valid 0% sampai 2%.') : null,
       state.me.isAdmin ? h('div',{class:'settings-grid'},h('div',{},h('label',{},'Affiliate ID'),affiliateId),h('div',{},h('label',{},'Commission rate (%)'),commissionRate)) : null,
       state.me.isAdmin ? h('button',{onclick:async()=>{try{await api.put('/api/settings/monetization',{affiliateId:affiliateId.value,commissionRate:commissionRate.value});toast('Pengaturan komisi tersimpan','success');}catch(e){toast(e.message,'error');}}},'Simpan pengaturan') : null
     )
